@@ -25,10 +25,18 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
 APPIUM_HOST = os.environ.get("APPIUM_HOST", "http://127.0.0.1:4723")
 SCREENSHOT_DIR = os.environ.get("SCREENSHOT_DIR", "/tmp/screenshots")
 FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", "").strip()
+# 内嵌截图需要飞书自建应用的凭证（自定义机器人 webhook 本身无法上传图片）
+FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
+FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
 COMMENT_TEXT = os.environ.get("COMMENT_TEXT", "内容很赞，支持一下！")
 DANMAKU_TEXT = os.environ.get("DANMAKU_TEXT", "前排支持")
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "2"))
 SCREENSHOT_BASE_URL = os.environ.get("SCREENSHOT_BASE_URL", "").strip()
+# 七牛云对象存储（用于托管截图，飞书卡片中以可点击链接展示）
+QINIU_AK = os.environ.get("QINIU_AK", "").strip()
+QINIU_SK = os.environ.get("QINIU_SK", "").strip()
+QINIU_BUCKET = os.environ.get("QINIU_BUCKET", "").strip()
+QINIU_DOMAIN = os.environ.get("QINIU_DOMAIN", "tja9zism0.hn-bkt.clouddn.com").strip()
 
 PKG = "com.nfgcz.app"
 ACTIVITY = "com.yy.myuko.app.MainActivityTinker"
@@ -352,6 +360,74 @@ def run_with_retry(fn, name, *args, **kwargs):
     return False
 
 
+def get_tenant_access_token():
+    """用自建应用的 app_id/app_secret 换取 tenant_access_token。"""
+    if not (FEISHU_APP_ID and FEISHU_APP_SECRET):
+        return None
+    try:
+        r = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
+            timeout=10,
+        )
+        data = r.json()
+        if data.get("code") != 0:
+            log(f"获取 tenant_access_token 失败: {data}")
+            return None
+        return data.get("tenant_access_token")
+    except Exception as e:
+        log(f"获取 tenant_access_token 异常: {e}")
+        return None
+
+
+def upload_image_to_feishu(path):
+    """上传本地图片到飞书，返回 image_key（失败返回 None）。"""
+    token = get_tenant_access_token()
+    if not token:
+        return None
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    try:
+        with open(path, "rb") as f:
+            r = requests.post(
+                "https://open.feishu.cn/open-apis/im/v1/images",
+                headers={"Authorization": f"Bearer {token}"},
+                data={"image_type": "message"},
+                files={"image": (os.path.basename(path), f, "image/png")},
+                timeout=30,
+            )
+        data = r.json()
+        if data.get("code") != 0:
+            log(f"上传图片失败 {os.path.basename(path)}: {data}")
+            return None
+        return data.get("data", {}).get("image_key")
+    except Exception as e:
+        log(f"上传图片异常 {os.path.basename(path)}: {e}")
+        return None
+
+
+def upload_to_qiniu(local_path, key):
+    """上传截图到七牛云，返回公开访问 URL；未配置或失败返回 None。"""
+    if not (QINIU_AK and QINIU_SK and QINIU_BUCKET and QINIU_DOMAIN):
+        return None
+    try:
+        from qiniu import Auth, put_file
+    except ImportError:
+        log("未安装 qiniu 依赖，跳过七牛云上传（pip install qiniu）")
+        return None
+    try:
+        q = Auth(QINIU_AK, QINIU_SK)
+        token = q.upload_token(QINIU_BUCKET, key, 3600)
+        ret, info = put_file(token, key, local_path)
+        if info.status_code == 200:
+            return f"https://{QINIU_DOMAIN}/{key}"
+        log(f"七牛云上传失败 {key}: {info}")
+        return None
+    except Exception as e:
+        log(f"七牛云上传异常 {key}: {e}")
+        return None
+
+
 def notify_feishu():
     if not FEISHU_WEBHOOK:
         log("未配置 FEISHU_WEBHOOK，跳过飞书通知")
@@ -366,14 +442,53 @@ def notify_feishu():
 
     elements = [{"tag": "div", "fields": fields}, {"tag": "hr"}]
 
-    # 可选：截图链接（飞书自定义机器人卡片不支持外链图片，改为可点击链接）
-    if SCREENSHOT_BASE_URL:
-        base = SCREENSHOT_BASE_URL.rstrip("/")
-        links = "\n".join(f"- [{n}]({base}/{n}.png)" for n in SHOT_NAMES)
+    # 截图展示优先级：飞书自建应用内嵌图（image_key）> 七牛云公开链接 > SCREENSHOT_BASE_URL 链接
+    qiniu_urls = {}
+    if QINIU_AK and QINIU_SK and QINIU_BUCKET and QINIU_DOMAIN:
+        log("正在上传截图到七牛云...")
+        for n in SHOT_NAMES:
+            p = os.path.join(SCREENSHOT_DIR, f"{n}.png")
+            if not os.path.exists(p) or os.path.getsize(p) == 0:
+                continue
+            url = upload_to_qiniu(p, f"{n}.png")
+            if url:
+                qiniu_urls[n] = url
+        if qiniu_urls:
+            log(f"已上传 {len(qiniu_urls)} 张截图到七牛云")
+
+    if FEISHU_APP_ID and FEISHU_APP_SECRET:
+        for n in SHOT_NAMES:
+            p = os.path.join(SCREENSHOT_DIR, f"{n}.png")
+            if not os.path.exists(p):
+                continue
+            if os.path.getsize(p) > 9 * 1024 * 1024:
+                log(f"截图 {n} 超过 9MB，跳过内嵌")
+                continue
+            key = upload_image_to_feishu(p)
+            if key:
+                elements.append({
+                    "tag": "img",
+                    "img_key": key,
+                    "alt": {"tag": "plain_text", "content": n},
+                })
+    elif qiniu_urls:
+        links = "\n".join(f"- [{n}]({u})" for n, u in qiniu_urls.items())
         elements.append({
             "tag": "div",
-            "text": {"tag": "lark_md", "content": f"**截图：**\n{links}"},
+            "text": {"tag": "lark_md", "content": f"**截图（七牛云）：**\n{links}"},
         })
+    elif SCREENSHOT_BASE_URL:
+        base = SCREENSHOT_BASE_URL.rstrip("/")
+        links = "\n".join(
+            f"- [{n}]({base}/{n}.png)"
+            for n in SHOT_NAMES
+            if os.path.exists(os.path.join(SCREENSHOT_DIR, f"{n}.png"))
+        )
+        if links:
+            elements.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": f"**截图：**\n{links}"},
+            })
 
     run_url = ""
     if os.environ.get("GITHUB_RUN_ID"):
