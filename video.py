@@ -56,7 +56,13 @@ def is_video_detail_page(driver):
         return False
     if is_home_feed(driver):
         return False
-    markers = ["详情", "讨论", "点我发弹幕", "选集", "立即观看", "简介", "收藏", "相关推荐", "发弹幕", "评论"]
+    # 详情页特征：返回按钮（content-desc='返回'）几乎只出现在详情页
+    try:
+        if driver.find_elements(By.XPATH, "//*[@content-desc='返回']"):
+            return True
+    except Exception:
+        pass
+    markers = ["详情", "讨论", "点我发弹幕", "选集", "简介", "收藏", "相关推荐", "发弹幕", "评论"]
     for m in markers:
         try:
             if driver.find_elements(By.XPATH, f"//*[contains(@text,'{m}')]"):
@@ -107,18 +113,16 @@ def go_home(driver, dump=False):
 
 
 def find_video_card(driver):
-    """在首页内容区找视频卡片候选。
+    """在首页 feed 找视频卡片候选（基于真实 UI 转储精修）。
 
-    注意：该 APP 用 Compose 编写，uiautomator 节点多半没有 text / clickable='true'，
-    因此这里收集「所有含 bounds 的节点」，按面积筛选（排除底部 tab 与顶部状态栏，
-    且只取面积在 4%~60% 屏之间的区块，视频卡片通常落在此区间），返回面积最大的若干候选。
+    真实结构：视频卡片是 clickable='true' 的 android.view.View，布局在内容区。
+    排除：顶栏/分类标签(y1<324)、底部 tab 栏(y2>1899)、右侧 VIP 浮窗(x1>820 且 y1>1500)。
+    返回按 (y1, x1) 排序的候选（上→下、左→右），便于按 index 选不同视频。
     """
     try:
-        els = driver.find_elements(By.XPATH, "//*")
+        els = driver.find_elements(By.XPATH, "//android.view.View[@clickable='true']")
     except Exception:
         return []
-    size = driver.get_window_size()
-    w, h = size["width"], size["height"]
     cands = []
     for el in els:
         try:
@@ -126,16 +130,15 @@ def find_video_card(driver):
             if not b:
                 continue
             x1, y1, x2, y2 = b
-            if y2 > h * 0.9 or y1 < h * 0.06:   # 排除底部 tab / 顶部状态栏
+            if y1 < 324 or y2 > 1899:           # 排除顶栏/分类标签、底 tab 栏
                 continue
-            area = (x2 - x1) * (y2 - y1)
-            ratio = area / (w * h)
-            if 0.04 <= ratio <= 0.6:            # 视频卡片面积区间
-                cands.append((area, el))
+            if x1 > 820 and y1 > 1500:          # 排除右侧 VIP 浮窗
+                continue
+            cands.append(((y1, x1), el))
         except Exception:
             continue
-    cands.sort(key=lambda x: x[0], reverse=True)
-    return [el for _, el in cands[:5]]           # 返回面积最大的前 5 个候选
+    cands.sort(key=lambda t: t[0])
+    return [el for _, el in cands]
 
 
 def swipe_feed_up(driver):
@@ -216,29 +219,31 @@ def enter_first_video(driver):
 
 
 def start_video_playback(driver):
-    """在视频详情页启动播放（弹幕任务的前置条件）。
+    """在视频详情页启动播放（弹幕任务前置条件）。
 
-    策略：1) 优先点击播放类文字按钮；2) 否则点击播放器中央
-    （暂停态通常显示大播放按钮）。点击后等待缓冲。
+    注意：详情页里的「立即观看」是 VIP 推广卡按钮，并非播放当前视频，不能点它。
+    正确做法：优先点 content-desc='播放' 的播放键（视频区中央），否则点视频区域触发播放/暂停切换。
     """
     log("尝试启动视频播放（弹幕任务前置条件）")
-    # 1) 文字按钮（最稳妥）
-    if find_and_click(driver, [
-        "立即观看", "播放", "开始观看", "免费观看", "观看视频",
-        "开始播放", "播放视频", "立即播放",
-    ], timeout=4):
-        log("已点击播放文字按钮，等待加载")
-        time.sleep(5)
-        return True
-    # 2) 点击播放器中央（暂停态通常显示大播放按钮，点击即播放）
+    # 1) 播放按钮（content-desc='播放'）
+    try:
+        btns = driver.find_elements(By.XPATH, "//*[@content-desc='播放']")
+        if btns:
+            btns[0].click()
+            log("已点击播放按钮，等待加载")
+            time.sleep(5)
+            return True
+    except Exception as e:
+        log(f"点击播放按钮失败: {e}")
+    # 2) 视频区域中心（[0,83][1080,853] 的偏上处）触发播放/暂停切换
     try:
         size = driver.get_window_size()
         w, h = size["width"], size["height"]
-        x, y = int(w * 0.5), int(h * 0.22)
+        x, y = int(w * 0.5), int(h * 0.21)
         driver.tap([(x, y)])
-        log(f"已点击播放器中央 ({x},{y})，等待加载")
+        log(f"已点击视频区域 ({x},{y})，等待加载")
         time.sleep(5)
         return True
     except Exception as e:
-        log(f"点击播放器中央失败: {e}")
+        log(f"点击视频区域失败: {e}")
     return False

@@ -100,11 +100,11 @@ def do_comment(driver, wait):
             save_ui_dump(driver, f"ui_detail_{i + 1}")
             log_ui_summary(driver)
 
-        # 切换到「讨论」tab
+        # 切换到「讨论」tab（真实 bounds [194,845][326,975]，中心约 (0.24, 0.40)）
         if not find_and_click(driver, ["讨论"], timeout=5):
             log("未找到讨论 tab，尝试按坐标点击")
             try:
-                tap_relative(driver, 0.33, 0.40)
+                tap_relative(driver, 0.24, 0.40)
                 time.sleep(2)
             except Exception as e:
                 log(f"坐标点击讨论 tab 失败: {e}")
