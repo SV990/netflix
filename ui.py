@@ -60,25 +60,42 @@ def save_ui_dump(driver, name):
         log(f"UI 控件树保存失败: {e}")
 
 
-def log_ui_summary(driver, max_nodes=60):
-    """把当前页面中有文字 / 可点击的节点摘要直接打到日志。
+def log_ui_summary(driver, max_nodes=40):
+    """把当前页面的控件结构直接打到日志（Compose 页面通常没有 text/clickable，
+    因此这里同时打印：(1) 有文字/描述的节点；(2) 面积最大的若干节点及其 class+bounds。
 
-    这样在 GitHub Actions 日志里即可看到首页真实布局（无需下载 artifact 再分析），
-    便于快速定位「视频卡片」「讨论 tab」「弹幕入口」等控件。
+    这样在 GitHub Actions 日志里就能看清真实布局，无需下载 artifact。
     """
     try:
+        import re as _re
         import xml.etree.ElementTree as ET
         root = ET.fromstring(driver.page_source)
-        count = 0
+        rows = []
         for n in root.iter("node"):
             a = n.attrib
-            t = (a.get("text") or "").strip()
-            d = (a.get("content-desc") or "").strip()
-            click = a.get("clickable", "")
-            if (t or d or click == "true") and count < max_nodes:
-                log(f"  [UI] text='{t}' desc='{d}' clickable={click} bounds={a.get('bounds')}")
-                count += 1
-        log(f"UI 摘要：已打印 {count} 个关键节点（用于定位视频卡片/讨论/弹幕入口）")
+            rows.append((
+                (a.get("text") or "").strip(),
+                (a.get("content-desc") or "").strip(),
+                a.get("class", ""),
+                a.get("bounds", ""),
+            ))
+        # (1) 有文字/描述的节点
+        shown = 0
+        for t, d, cls, b in rows:
+            if (t or d) and shown < max_nodes:
+                log(f"  [UI] text='{t}' desc='{d}' class={cls} bounds={b}")
+                shown += 1
+        # (2) 面积最大的若干节点（Compose 即使无 text，也能借此推断视频卡片位置）
+        sized = []
+        for t, d, cls, b in rows:
+            nums = _re.findall(r"\d+", b)
+            if len(nums) >= 4:
+                x1, y1, x2, y2 = map(int, nums[:4])
+                sized.append(((x2 - x1) * (y2 - y1), cls, b, t or d))
+        sized.sort(reverse=True)
+        for area, cls, b, label in sized[:15]:
+            log(f"  [BIG] class={cls} bounds={b} {'text=' + label if label else '(no-text)'}")
+        log(f"UI 摘要：文字节点 {shown} 个，最大面积节点已打印（用于定位视频卡片/讨论/弹幕入口）")
     except Exception as e:
         log(f"UI 摘要失败: {e}")
 

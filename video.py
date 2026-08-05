@@ -30,11 +30,24 @@ def _parse_bounds(bounds):
 
 
 def is_video_detail_page(driver):
-    """判断当前是否已进入视频详情/播放页。"""
-    markers = ["详情", "讨论", "点我发弹幕", "选集", "立即观看", "简介", "收藏", "推荐", "相关推荐"]
+    """判断当前是否已进入视频详情/播放页。
+
+    Compose 页面 text 多为空，因此除文字标记外，额外识别视频播放控件
+    （VideoView / TextureView / SurfaceView），只要出现即视为已进详情页。
+    """
+    markers = ["详情", "讨论", "点我发弹幕", "选集", "立即观看", "简介", "收藏", "相关推荐", "发弹幕", "评论"]
     for m in markers:
-        if driver.find_elements(By.XPATH, f"//*[contains(@text,'{m}')]"):
-            return True
+        try:
+            if driver.find_elements(By.XPATH, f"//*[contains(@text,'{m}')]"):
+                return True
+        except Exception:
+            continue
+    for cls in ["VideoView", "TextureView", "SurfaceView"]:
+        try:
+            if driver.find_elements(By.XPATH, f"//*[contains(@class,'{cls}')]"):
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -63,32 +76,35 @@ def go_home(driver):
 
 
 def find_video_card(driver):
-    """在首页内容区找「面积最大的可点击元素」（视频卡片通常最大）。返回元素或 None。"""
+    """在首页内容区找视频卡片候选。
+
+    注意：该 APP 用 Compose 编写，uiautomator 节点多半没有 text / clickable='true'，
+    因此这里收集「所有含 bounds 的节点」，按面积筛选（排除底部 tab 与顶部状态栏，
+    且只取面积在 4%~60% 屏之间的区块，视频卡片通常落在此区间），返回面积最大的若干候选。
+    """
     try:
-        els = driver.find_elements(By.XPATH, "//*[@clickable='true']")
+        els = driver.find_elements(By.XPATH, "//*")
     except Exception:
-        return None
+        return []
     size = driver.get_window_size()
     w, h = size["width"], size["height"]
-    best, best_area = None, 0
+    cands = []
     for el in els:
         try:
             b = _parse_bounds(el.get_attribute("bounds"))
             if not b:
                 continue
             x1, y1, x2, y2 = b
-            if y2 > h * 0.9:          # 排除底部导航栏
-                continue
-            if y1 < h * 0.06:         # 排除顶部状态栏区域
+            if y2 > h * 0.9 or y1 < h * 0.06:   # 排除底部 tab / 顶部状态栏
                 continue
             area = (x2 - x1) * (y2 - y1)
-            if area < (w * h * 0.04):  # 排除小按钮
-                continue
-            if area > best_area:
-                best_area, best = area, el
+            ratio = area / (w * h)
+            if 0.04 <= ratio <= 0.6:            # 视频卡片面积区间
+                cands.append((area, el))
         except Exception:
             continue
-    return best
+    cands.sort(key=lambda x: x[0], reverse=True)
+    return [el for _, el in cands[:5]]           # 返回面积最大的前 5 个候选
 
 
 def swipe_feed_up(driver):
@@ -118,12 +134,17 @@ def enter_video_by_index(driver, index=0):
     for _ in range(min(index, 6)):
         swipe_feed_up(driver)
 
-    # 方式一：元素定位（最可靠，不依赖像素坐标）
-    card = find_video_card(driver)
-    if card:
+    # 方式一：元素定位（按面积找视频卡片候选，逐个尝试点不同位置）
+    cards = find_video_card(driver)
+    log(f"元素定位找到 {len(cards)} 个候选视频卡片")
+    for off in range(len(cards)):
+        if is_video_detail_page(driver):
+            log("成功进入视频详情页")
+            return True
+        card = cards[(index + off) % len(cards)]
         try:
             card.click()
-            time.sleep(4)
+            time.sleep(2)
             log("已点击视频卡片（元素定位）")
         except Exception as e:
             log(f"点击视频卡片失败: {e}")

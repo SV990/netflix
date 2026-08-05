@@ -7,7 +7,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from config import log, COMMENT_TEXT, DANMAKU_TEXT, MAX_RETRIES, COMMENT_COUNT
-from ui import find_and_click, click_contains, save_screenshot, get_input, tap_relative
+from ui import find_and_click, click_contains, save_screenshot, get_input, tap_relative, save_ui_dump, log_ui_summary
 from launch import navigate_to_task
 from video import enter_first_video, enter_video_by_index, go_home, start_video_playback
 
@@ -95,6 +95,9 @@ def do_comment(driver, wait):
             go_home(driver)
             continue
         time.sleep(1.5)
+        # 诊断：保存详情页控件树，便于分析「讨论」tab 与评论输入框的真实结构
+        save_ui_dump(driver, f"ui_detail_{i + 1}")
+        log_ui_summary(driver)
 
         # 切换到「讨论」tab
         if not find_and_click(driver, ["讨论"], timeout=5):
@@ -151,6 +154,9 @@ def do_danmaku(driver, wait):
         log("无法进入视频详情页，弹幕任务失败")
         return False
     time.sleep(2)
+    # 诊断：保存详情页控件树
+    save_ui_dump(driver, "ui_detail_danmaku")
+    log_ui_summary(driver)
 
     # 必须先启动播放，否则弹幕无法发送
     start_video_playback(driver)
