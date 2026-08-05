@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""启动流程：处理引导页/广告/权限弹窗、登录、进入任务页。"""
+import time
+
+from selenium.webdriver.common.by import By
+
+from config import log, APP_USERNAME, APP_PASSWORD
+from ui import find_and_click, click_contains, swipe_right, tap_relative, get_input
+
+
+def handle_launch_interferences(driver, max_swipes=6):
+    """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
+    采用「固定次数滑动 + 每轮尝试点结束按钮」策略，避免被 onboarding 文案判定卡死。
+    """
+    log("检查并处理启动引导页/广告/弹窗")
+    finish_texts = ["跳过", "跳过广告", "立即体验", "进入", "开始体验", "开始", "马上体验",
+                    "开启", "立即开启", "知道了", "我知道了", "同意并继续", "同意", "确定", "下一步",
+                    "完成", "进入奈飞", "立即进入", "关闭", "暂不", "以后再说"]
+    finish_kw = ["跳过", "体验", "进入", "开启", "同意", "完成", "开始", "下一步", "知道了", "关闭"]
+    perm_texts = ["允许", "仅使用期间允许", "ALLOW", "ALWAYS", "始终允许"]
+    perm_kw = ["允许", "同意"]
+    tab_xpath = "//*[@text='首页' or @text='推荐' or @text='我的' or @text='任务' or @text='福利' or @text='分类' or @text='视频']"
+
+    for i in range(max_swipes + 2):
+        time.sleep(1.5)
+
+        # 1) 尝试点结束/同意按钮（精确）
+        if find_and_click(driver, finish_texts, timeout=2):
+            log("点击了启动页结束/同意按钮（精确）")
+            time.sleep(2.5)
+        else:
+            # 模糊匹配（按钮文案不固定时）
+            hit = click_contains(driver, finish_kw, timeout=2)
+            if hit:
+                log(f"点击了启动页结束按钮（模糊匹配: {hit}）")
+                time.sleep(2.5)
+
+        # 2) 权限弹窗
+        if find_and_click(driver, perm_texts, timeout=2):
+            log("处理了系统权限弹窗（精确）")
+            time.sleep(1.5)
+        else:
+            click_contains(driver, perm_kw, timeout=2)
+            time.sleep(1.5)
+
+        # 3) 是否已到达主界面
+        if driver.find_elements(By.XPATH, tab_xpath):
+            log("已到达 APP 主界面")
+            return
+
+        # 4) 固定滑动翻页（加强手势 + 长等待，不依赖 onboarding 文案判定）
+        log(f"第 {i+1} 次尝试滑动翻页")
+        swipe_right(driver, duration=700)
+        time.sleep(2.5)
+
+    # 兜底：最后再精确点一次结束按钮
+    find_and_click(driver, finish_texts, timeout=3)
+    log("启动引导处理结束（已达最大滑动次数）")
+
+
+def dismiss_common_popups(driver, timeout=3):
+    """处理 APP 内常见的弹窗：系统公告、升级提示、活动浮层等。
+    优先点击「我知道了/关闭/跳过」，不阻塞主流程。
+    """
+    # 1) 系统公告
+    if driver.find_elements(By.XPATH, "//*[@text='系统公告']"):
+        log("检测到系统公告弹窗")
+        for txt in ["我知道了", "关闭", "我知道了"]:
+            if find_and_click(driver, [txt], timeout=timeout):
+                log(f"已点击 {txt} 关闭系统公告")
+                time.sleep(1.5)
+                return True
+        # fallback：点弹窗右下角区域（常见按钮位置）
+        size = driver.get_window_size()
+        x, y = size["width"], size["height"]
+        tap_x, tap_y = int(x * 0.75), int(y * 0.72)
+        log(f"尝试点击系统公告右下角({tap_x},{tap_y})")
+        try:
+            driver.tap([(tap_x, tap_y)])
+            time.sleep(1.5)
+            return True
+        except Exception:
+            pass
+
+    # 2) 通用关闭/跳过/以后再说
+    for txt in ["关闭", "我知道了", "知道了", "暂不", "以后再说", "跳过"]:
+        try:
+            el = driver.find_element(By.XPATH, f"//*[@text='{txt}']")
+            if el.is_displayed():
+                el.click()
+                log(f"关闭通用弹窗按钮：{txt}")
+                time.sleep(1)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def is_login_page(driver):
+    """判断是否已在账号密码登录页。"""
+    edits = driver.find_elements(By.XPATH, "//android.widget.EditText")
+    if len(edits) >= 2:
+        return True
+    markers = [
+        "//*[@text='登录注册']",
+        "//*[contains(@text,'邮箱/手机号')]",
+        "//*[contains(@text,'请输入密码')]",
+        "//android.widget.EditText[contains(@hint,'邮箱') or contains(@hint,'手机号')]",
+    ]
+    for xp in markers:
+        if driver.find_elements(By.XPATH, xp):
+            return True
+    return False
+
+
+def try_login(driver, wait):
+    """从「我的」页进入登录页并填写账号密码登录。"""
+    if is_login_page(driver):
+        log("当前已在登录页")
+    else:
+        log("先进入「我的」页")
+        if find_and_click(driver, ["我的"], timeout=5):
+            log("已点击「我的」tab")
+            time.sleep(2)
+        else:
+            log("未找到「我的」tab，尝试直接找登录入口")
+
+        log("尝试点击「未登录」进入登录页")
+        if not find_and_click(driver, ["未登录"], timeout=5):
+            # fallback：点击包含「未登录」文字的最近可点击父元素
+            try:
+                el = driver.find_element(
+                    By.XPATH,
+                    "//*[contains(@text,'未登录')]/ancestor::*[@clickable='true'][1]",
+                )
+                el.click()
+                log("已点击未登录区域")
+            except Exception:
+                pass
+        time.sleep(3)
+
+    if not is_login_page(driver):
+        log("未能进入登录页")
+        return False
+
+    edits = driver.find_elements(By.XPATH, "//android.widget.EditText")
+    log(f"检测到登录页，共 {len(edits)} 个输入框")
+
+    # 优先按 hint/text 定位；找不到则取前两个 EditText
+    username_input = get_input(driver, [
+        "//android.widget.EditText[contains(@hint,'邮箱') or contains(@hint,'手机号')]",
+        "//android.widget.EditText[contains(@text,'邮箱') or contains(@text,'手机号')]",
+    ]) or (edits[0] if edits else None)
+    pwd_input = get_input(driver, [
+        "//android.widget.EditText[contains(@hint,'密码')]",
+        "//android.widget.EditText[contains(@text,'密码')]",
+    ]) or (edits[1] if len(edits) >= 2 else None)
+
+    if not username_input or not pwd_input:
+        log("登录页输入框定位失败")
+        return False
+
+    username_input.click()
+    username_input.clear()
+    username_input.send_keys(APP_USERNAME)
+    log("已填写账号")
+    time.sleep(1)
+
+    pwd_input.click()
+    pwd_input.clear()
+    pwd_input.send_keys(APP_PASSWORD)
+    log("已填写密码")
+    time.sleep(1)
+
+    if find_and_click(driver, ["登录"], timeout=5):
+        log("已点击登录")
+        time.sleep(5)
+        return True
+
+    log("未找到登录按钮")
+    return False
+
+
+def navigate_to_task(driver, wait):
+    """点击底部 tab 进入任务中心。"""
+    log("正在进入任务页")
+    for txt in ["任务", "任务中心"]:
+        if find_and_click(driver, [txt], timeout=5):
+            log(f"已点击 tab '{txt}'")
+            time.sleep(3)
+            return True
+    log("未找到任务 tab")
+    return False
