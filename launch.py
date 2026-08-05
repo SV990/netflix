@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """启动流程：处理引导页/广告/权限弹窗、登录、进入任务页。"""
 import time
+import re
+import xml.etree.ElementTree as ET
 
 from selenium.webdriver.common.by import By
 
@@ -8,9 +10,43 @@ from config import log, APP_USERNAME, APP_PASSWORD, PKG, ACTIVITY
 from ui import find_and_click, click_contains, swipe_right, tap_relative, get_input
 
 
-def handle_launch_interferences(driver, max_swipes=6):
+def _parse_nodes(src):
+    """把 page_source 解析成 [(label, x1,y1,x2,y2), ...]，label 取 text/content-desc。"""
+    nodes = []
+    try:
+        root = ET.fromstring(src)
+    except Exception:
+        return nodes
+    for n in root.iter("node"):
+        a = n.attrib
+        label = (a.get("text") or a.get("content-desc") or "").strip()
+        bounds = a.get("bounds", "")
+        if label and bounds:
+            nums = [int(x) for x in re.findall(r"\d+", bounds)]
+            if len(nums) >= 4:
+                nodes.append((label, nums[0], nums[1], nums[2], nums[3]))
+    return nodes
+
+
+def _tap_label(driver, kws, nodes):
+    """在节点列表里找 label 含任一关键词的节点，点其几何中心。返回是否命中。"""
+    for label, x1, y1, x2, y2 in nodes:
+        if any(kw in label for kw in kws):
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            try:
+                driver.tap([(cx, cy)])
+                return True
+            except Exception:
+                return False
+    return False
+
+
+def handle_launch_interferences(driver, max_swipes=4):
     """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
-    采用「固定次数滑动 + 每轮尝试点结束按钮」策略，避免被 onboarding 文案判定卡死。
+
+    性能要点：Compose 应用下每次 find_elements 都会触发完整控件树 dump，极慢。
+    这里改为**每轮只 page_source 一次**，本地解析节点后点坐标，把「每轮 4~6 次 dump」
+    降到「每轮 1 次」，启动引导通常可在 10 秒内走完。
     """
     log("检查并处理启动引导页/广告/弹窗")
     finish_texts = ["跳过", "跳过广告", "立即体验", "进入", "开始体验", "开始", "马上体验",
@@ -19,42 +55,54 @@ def handle_launch_interferences(driver, max_swipes=6):
     finish_kw = ["跳过", "体验", "进入", "开启", "同意", "完成", "开始", "下一步", "知道了", "关闭"]
     perm_texts = ["允许", "仅使用期间允许", "ALLOW", "ALWAYS", "始终允许"]
     perm_kw = ["允许", "同意"]
-    tab_xpath = "//*[@text='首页' or @text='推荐' or @text='我的' or @text='任务' or @text='福利' or @text='分类' or @text='视频']"
+    tab_keywords = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频"]
 
-    for i in range(max_swipes + 2):
-        time.sleep(1.5)
+    for i in range(max_swipes + 1):
+        # 每轮仅 dump 一次，本地解析（避免多次控件树查找拖慢）
+        try:
+            xml = driver.page_source
+        except Exception:
+            xml = ""
+        nodes = _parse_nodes(xml)
 
-        # 1) 尝试点结束/同意按钮（精确）
-        if find_and_click(driver, finish_texts, timeout=2):
-            log("点击了启动页结束/同意按钮（精确）")
-            time.sleep(2.5)
-        else:
-            # 模糊匹配（按钮文案不固定时）
-            hit = click_contains(driver, finish_kw, timeout=2)
-            if hit:
-                log(f"点击了启动页结束按钮（模糊匹配: {hit}）")
-                time.sleep(2.5)
-
-        # 2) 权限弹窗
-        if find_and_click(driver, perm_texts, timeout=2):
-            log("处理了系统权限弹窗（精确）")
-            time.sleep(1.5)
-        else:
-            click_contains(driver, perm_kw, timeout=2)
-            time.sleep(1.5)
-
-        # 3) 是否已到达主界面
-        if driver.find_elements(By.XPATH, tab_xpath):
+        # 1) 是否已到达主界面
+        if any(any(k in lbl for k in tab_keywords) for lbl, *_ in nodes) or \
+           any(k in xml for k in tab_keywords):
             log("已到达 APP 主界面")
             return
 
-        # 4) 固定滑动翻页（加强手势 + 长等待，不依赖 onboarding 文案判定）
+        # 2) 结束/同意按钮（精确）
+        if _tap_label(driver, finish_texts, nodes):
+            log("点击了启动页结束/同意按钮（精确）")
+            time.sleep(0.8)
+            continue
+        # 3) 模糊匹配
+        if _tap_label(driver, finish_kw, nodes):
+            log("点击了启动页结束按钮（模糊匹配）")
+            time.sleep(0.8)
+            continue
+        # 4) 权限弹窗
+        if _tap_label(driver, perm_texts, nodes):
+            log("处理了系统权限弹窗（精确）")
+            time.sleep(0.5)
+            continue
+        if _tap_label(driver, perm_kw, nodes):
+            log("处理了权限弹窗（模糊）")
+            time.sleep(0.5)
+            continue
+
+        # 5) 滑动翻页
         log(f"第 {i+1} 次尝试滑动翻页")
-        swipe_right(driver, duration=700)
-        time.sleep(2.5)
+        swipe_right(driver, duration=350)
+        time.sleep(1)
 
     # 兜底：最后再精确点一次结束按钮
-    find_and_click(driver, finish_texts, timeout=3)
+    try:
+        xml = driver.page_source
+        nodes = _parse_nodes(xml)
+        _tap_label(driver, finish_texts, nodes)
+    except Exception:
+        pass
     log("启动引导处理结束（已达最大滑动次数）")
 
 
