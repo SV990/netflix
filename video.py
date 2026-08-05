@@ -7,7 +7,7 @@ from selenium.webdriver.common.by import By
 
 from config import log, PKG
 from ui import find_and_click, click_contains, tap_relative, save_ui_dump, log_ui_summary
-from launch import dismiss_common_popups, ensure_app_foreground, is_onboarding_page
+from launch import dismiss_common_popups, ensure_app_foreground, is_onboarding_page, _parse_all_bounds
 
 # 首页视频卡片候选点击位置（相对坐标，兜底用）。
 VIDEO_CANDIDATES = [
@@ -87,9 +87,23 @@ def is_video_detail_page(driver):
                 return True
         except Exception:
             continue
-    # 过去这里会「在 APP 内且看不到首页 Tab → 默认视为详情页」，
-    # 但这会造成假成功（停留在未知页/桌面拉起页也误判为详情页）。
-    # 改为：无正向后不视为详情页，交由上层 tap 策略去尝试，避免连锁误判。
+    # 兜底：在 APP 内、不在 feed、不是 onboarding，且屏幕上半部分存在大面积区域
+    # （符合播放器占据顶部的事实），则视为详情页。这比之前的「看不到首页 tab 就算」
+    # 严格，避免未知页/桌面拉起页被误判，同时提高真实详情页的识别率。
+    try:
+        xml = driver.page_source
+        size = driver.get_window_size()
+        w, h = size["width"], size["height"]
+        if not is_onboarding_page(xml, w, h):
+            for cls, x1, y1, x2, y2 in _parse_all_bounds(xml):
+                bw, bh = x2 - x1, y2 - y1
+                # 播放器通常占满屏幕宽度、高度约 25%~55%、位于顶部
+                if bw > 0.85 * w and 0.22 * h < bh < 0.60 * h and y2 < 0.65 * h:
+                    log("检测到顶部大面积视频区域，视为视频详情页")
+                    return True
+    except Exception:
+        pass
+
     log("未检测到详情页特征，不视为视频详情页")
     return False
 

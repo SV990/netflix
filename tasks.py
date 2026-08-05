@@ -127,15 +127,16 @@ def do_comment(driver, wait):
         log(f"已填写评论: {COMMENT_TEXT}")
         time.sleep(0.5)
 
-        # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
         # 优先点击输入框右侧的「发送」按钮（截图中蓝色文字按钮在输入框右边）
         clicked = False
-        try:
-            tap_right_of_element(driver, edit, rx=0.92)
-            log("已点击输入框右侧发送按钮")
-            clicked = True
-        except Exception as e:
-            log(f"坐标点击发送按钮失败: {e}")
+        for rx in [0.92, 0.95, 0.88]:
+            try:
+                tap_right_of_element(driver, edit, rx=rx)
+                log(f"已点击评论输入框右侧发送按钮（rx={rx}）")
+                clicked = True
+                break
+            except Exception as e:
+                log(f"坐标点击评论发送按钮（rx={rx}）失败: {e}")
 
         # 兜底：按键盘发送键 / 文字按钮
         if not clicked:
@@ -170,16 +171,29 @@ def do_danmaku(driver, wait):
     save_ui_dump(driver, "ui_detail_danmaku")
     log_ui_summary(driver)
 
-    # 必须先启动播放，否则弹幕无法发送
+    # 必须先启动播放，否则弹幕无法发送；截图显示需等待约 10 秒弹幕才可用
     start_video_playback(driver)
-    time.sleep(2)
+    log("等待视频播放，使弹幕入口可用")
+    time.sleep(12)
 
     save_screenshot(driver, "07_danmaku_page")
 
-    # 点击弹幕输入入口
-    if not (find_and_click(driver, ["点我发弹幕"], timeout=5) or
-            click_contains(driver, ["发弹幕", "弹幕"], timeout=3)):
-        log("未通过文字找到弹幕入口，尝试按坐标点击")
+    # 点击弹幕输入入口（截图：详情页右上角有 hint="点我发弹幕" 的输入框）
+    danmaku_edit = get_input(driver, [
+        "//android.widget.EditText[contains(@hint,'点我发弹幕')]",
+        "//android.widget.EditText[contains(@hint,'弹幕')]",
+        "//android.widget.EditText[contains(@hint,'发言')]",
+        "//android.widget.EditText",
+    ])
+    if danmaku_edit:
+        try:
+            danmaku_edit.click()
+            log("已点击弹幕输入入口")
+            time.sleep(1.5)
+        except Exception as e:
+            log(f"点击弹幕输入入口失败: {e}")
+    else:
+        log("未通过 hint 找到弹幕输入框，尝试按坐标点击")
         try:
             tap_relative(driver, 0.82, 0.43)
             time.sleep(2)
@@ -190,8 +204,8 @@ def do_danmaku(driver, wait):
     save_screenshot(driver, "07_danmaku_input")
 
     edit = get_input(driver, [
-        "//android.widget.EditText[contains(@hint,'弹幕')]",
         "//android.widget.EditText[contains(@hint,'点我发弹幕')]",
+        "//android.widget.EditText[contains(@hint,'弹幕')]",
         "//android.widget.EditText[contains(@hint,'发言')]",
         "//android.widget.EditText",
     ])
@@ -204,14 +218,16 @@ def do_danmaku(driver, wait):
     log(f"已填写弹幕: {DANMAKU_TEXT}")
     time.sleep(1)
 
-    # 优先点击输入框右侧的「发送」按钮
+    # 优先点击输入框右侧的「发送」按钮（截图为小飞机图标，位于输入框右侧）
     clicked = False
-    try:
-        tap_right_of_element(driver, edit, rx=0.92)
-        log("已点击弹幕输入框右侧发送按钮")
-        clicked = True
-    except Exception as e:
-        log(f"坐标点击弹幕发送按钮失败: {e}")
+    for rx in [0.95, 0.92, 0.88]:
+        try:
+            tap_right_of_element(driver, edit, rx=rx)
+            log(f"已点击弹幕输入框右侧发送按钮（rx={rx}）")
+            clicked = True
+            break
+        except Exception as e:
+            log(f"坐标点击弹幕发送按钮（rx={rx}）失败: {e}")
 
     # 兜底：按键盘发送键 / 文字按钮
     if not clicked:

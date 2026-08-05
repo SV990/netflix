@@ -93,11 +93,19 @@ def is_onboarding_page(xml, w, h):
         k in xml for k in ["首页", "推荐", "我的", "任务", "详情", "讨论"]))
 
 
-def handle_onboarding_pages(driver, max_taps=6):
-    """处理 Compose onboarding/引导页。
+def handle_onboarding_pages(driver, max_swipes=4):
+    """处理 Compose 多页 onboarding/引导页（如「流畅播放→高清画质→丰富片库→个性推荐」）。
 
-    这些页面通常不暴露 text/content-desc，只能按几何坐标点击底部中央的操作按钮
-    （如「立即开启」「下一步」「完成」）。
+    真实流程（截图确认）：
+      - 共 4 页滑动引导，底部有 3~5 个指示点；
+      - 最后一页（个性推荐）底部中央有蓝色「立即开启」按钮；
+      - 点击后进入首页，并立即弹出「系统公告」。
+
+    这些页面通常不暴露 text/content-desc，因此策略：
+      1) 先尝试按文字点「立即开启/开启/完成/下一步」等；
+      2) 文字找不到则按坐标点底部中央按钮（y≈0.82，截图按钮位置）；
+      3) 仍未离开则向右滑动翻下一页，重复 1~2；
+      4) 最多滑动 max_swipes 次。
     """
     log("检查 onboarding/引导页")
     try:
@@ -108,8 +116,10 @@ def handle_onboarding_pages(driver, max_taps=6):
         return False
 
     home_markers = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频"]
+    finish_texts = ["立即开启", "开启", "立即体验", "开始体验", "进入", "开始",
+                    "完成", "下一步", "知道了", "我知道了"]
 
-    for i in range(max_taps):
+    for i in range(max_swipes + 1):
         try:
             xml = driver.page_source
         except Exception:
@@ -121,29 +131,44 @@ def handle_onboarding_pages(driver, max_taps=6):
             log("当前页面不是 onboarding 页，结束处理")
             return True
 
-        log(f"检测到 onboarding 页，点击底部中央操作按钮（第 {i+1}/{max_taps} 次）")
-        # 大图下方、指示点上方的按钮区域；先试 0.86，再 0.82 / 0.90 兜底
-        for ry in [0.86, 0.82, 0.90]:
+        log(f"检测到 onboarding 页（第 {i+1}/{max_swipes+1} 页），尝试点击结束按钮")
+        # 1) 先按文字点（最后一页可能暴露「立即开启」等）
+        nodes = _parse_nodes(xml)
+        if _tap_label(driver, finish_texts, nodes):
+            time.sleep(1.5)
             try:
-                tap_relative(driver, 0.50, ry)
-                time.sleep(1.0)
                 xml2 = driver.page_source
-                if any(kw in xml2 for kw in home_markers):
-                    log("点击后已到达 APP 主界面")
-                    return True
-                if not is_onboarding_page(xml2, w, h):
-                    log("点击后已离开 onboarding 页")
-                    return True
-            except Exception as e:
-                log(f"点击 onboarding 按钮失败: {e}")
-                continue
+            except Exception:
+                xml2 = ""
+            if any(kw in xml2 for kw in home_markers):
+                log("点击结束按钮后到达主界面")
+                return True
+            if xml2 and not is_onboarding_page(xml2, w, h):
+                log("点击结束按钮后离开 onboarding 页")
+                return True
+            continue
 
-        # 若仍未离开，可能是多页引导，向右滑动翻页
+        # 2) 按坐标点底部中央蓝色按钮（截图中「立即开启」约位于 y=0.82）
+        for ry in [0.82, 0.85, 0.78, 0.88]:
+            tap_relative(driver, 0.50, ry)
+            time.sleep(1.2)
+            try:
+                xml2 = driver.page_source
+            except Exception:
+                xml2 = ""
+            if any(kw in xml2 for kw in home_markers):
+                log("坐标点击底部按钮后到达主界面")
+                return True
+            if xml2 and not is_onboarding_page(xml2, w, h):
+                log("坐标点击底部按钮后离开 onboarding 页")
+                return True
+
+        # 3) 仍未离开，向右滑动翻下一页
         log("尝试右滑翻下一页引导")
         swipe_right(driver, duration=350)
-        time.sleep(0.8)
+        time.sleep(1)
 
-    log(f"处理 onboarding 页达到最大次数 {max_taps}")
+    log("处理 onboarding 页达到最大次数")
     return False
 
 
@@ -232,23 +257,9 @@ def handle_launch_interferences(driver, max_rounds=14):
         try:
             size = driver.get_window_size()
             if is_onboarding_page(xml, size["width"], size["height"]):
-                log("几何特征识别到 onboarding 页，依次点击候选按钮位置")
-                candidates = [(0.50, 0.85), (0.50, 0.90), (0.50, 0.80),
-                              (0.82, 0.86), (0.82, 0.90), (0.50, 0.72),
-                              (0.50, 0.62), (0.50, 0.45)]
-                for cx, cy in candidates:
-                    tap_relative(driver, cx, cy)
-                    time.sleep(1.0)
-                    try:
-                        xml2 = driver.page_source
-                    except Exception:
-                        xml2 = ""
-                    if any(k in xml2 for k in tab_keywords):
-                        log("点击后已到达 APP 主界面")
-                        return
-                    if not is_onboarding_page(xml2, size["width"], size["height"]):
-                        log("点击后已离开 onboarding 页")
-                        return
+                log("几何特征识别到 onboarding 页，进入专门处理流程")
+                if handle_onboarding_pages(driver):
+                    return
                 continue
         except Exception as e:
             log(f"onboarding 几何识别异常: {e}")
@@ -318,25 +329,27 @@ def dismiss_common_popups(driver, timeout=3):
     """处理 APP 内常见的弹窗：系统公告、升级提示、活动浮层等。
     优先点击「我知道了/关闭/跳过」，不阻塞主流程。
     """
-    # 1) 系统公告
+    # 1) 系统公告（截图：白色弹窗，右下角蓝色「我知道了」按钮）
     if driver.find_elements(By.XPATH, "//*[@text='系统公告']"):
         log("检测到系统公告弹窗")
-        for txt in ["我知道了", "关闭", "我知道了"]:
+        # 优先点「我知道了」；若文案不同，尝试同类确认按钮
+        for txt in ["我知道了", "知道了", "确认", "关闭"]:
             if find_and_click(driver, [txt], timeout=timeout):
                 log(f"已点击 {txt} 关闭系统公告")
                 time.sleep(1.5)
                 return True
-        # fallback：点弹窗右下角区域（常见按钮位置）
+        # fallback：点弹窗右下角蓝色按钮区域（截图中约 x=0.75, y=0.80）
         size = driver.get_window_size()
         x, y = size["width"], size["height"]
-        tap_x, tap_y = int(x * 0.75), int(y * 0.72)
-        log(f"尝试点击系统公告右下角({tap_x},{tap_y})")
-        try:
-            driver.tap([(tap_x, tap_y)])
-            time.sleep(1.5)
-            return True
-        except Exception:
-            pass
+        for rx, ry in [(0.75, 0.80), (0.75, 0.75), (0.75, 0.85)]:
+            tap_x, tap_y = int(x * rx), int(y * ry)
+            log(f"尝试点击系统公告右下角({tap_x},{tap_y})")
+            try:
+                driver.tap([(tap_x, tap_y)])
+                time.sleep(1.5)
+                return True
+            except Exception:
+                pass
 
     # 2) 通用关闭/跳过/以后再说
     for txt in ["关闭", "我知道了", "知道了", "暂不", "以后再说", "跳过"]:

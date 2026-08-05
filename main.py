@@ -63,6 +63,13 @@ def main():
         save_ui_dump(driver, "ui_launch")
         log_ui_summary(driver)
 
+        # 引导页结束后常立即弹出「系统公告」等弹窗，先清掉再登录，
+        # 否则「我的」tab 被弹窗遮挡会导致登录失败。
+        for _ in range(3):
+            if not dismiss_common_popups(driver):
+                break
+        save_screenshot(driver, "01_after_popup")
+
         run_with_retry(try_login, "登录", driver, wait)
         save_screenshot(driver, "02_after_login")
         save_ui_dump(driver, "ui_login")
