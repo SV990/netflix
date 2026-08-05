@@ -27,6 +27,8 @@ FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
 DEFAULT_TEXT = "生活慢慢，欢喜常在"
 COMMENT_TEXT = os.environ.get("COMMENT_TEXT", DEFAULT_TEXT)
 DANMAKU_TEXT = os.environ.get("DANMAKU_TEXT", DEFAULT_TEXT)
+# 评论任务需要评论的视频条数（每个视频评论一次）
+COMMENT_COUNT = int(os.environ.get("COMMENT_COUNT", "5"))
 
 # ---- 重试 / 反馈 ----
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "2"))

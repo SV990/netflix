@@ -6,10 +6,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from config import log, COMMENT_TEXT, DANMAKU_TEXT, MAX_RETRIES
+from config import log, COMMENT_TEXT, DANMAKU_TEXT, MAX_RETRIES, COMMENT_COUNT
 from ui import find_and_click, click_contains, save_screenshot, get_input, tap_relative
 from launch import navigate_to_task
-from video import enter_first_video
+from video import enter_first_video, enter_video_by_index, go_home, start_video_playback
 
 
 def run_with_retry(fn, name, *args, **kwargs):
@@ -84,68 +84,76 @@ def do_checkin(driver, wait):
 
 
 def do_comment(driver, wait):
-    """执行评论领金币：首页进入任意视频 → 切换到讨论 tab → 输入评论 → 发送。"""
-    log("开始执行：评论领金币")
-    if not run_with_retry(enter_first_video, "进入视频详情页", driver):
-        log("无法进入视频详情页，评论任务失败")
-        return False
-    time.sleep(2)
+    """执行评论领金币：依次在 COMMENT_COUNT 个不同视频下评论。"""
+    log(f"开始执行：评论领金币（目标 {COMMENT_COUNT} 条）")
+    success = 0
+    for i in range(COMMENT_COUNT):
+        log(f"--- 评论第 {i + 1}/{COMMENT_COUNT} 条 ---")
+        if not run_with_retry(lambda d: enter_video_by_index(d, i), "进入视频详情页", driver):
+            log("无法进入视频详情页，跳过本条")
+            go_home(driver)
+            continue
+        time.sleep(2)
 
-    # 切换到「讨论」tab
-    if not find_and_click(driver, ["讨论"], timeout=5):
-        log("未找到讨论 tab，尝试按坐标点击")
-        try:
-            tap_relative(driver, 0.33, 0.40)
-            time.sleep(2)
-        except Exception as e:
-            log(f"坐标点击讨论 tab 失败: {e}")
+        # 切换到「讨论」tab
+        if not find_and_click(driver, ["讨论"], timeout=5):
+            log("未找到讨论 tab，尝试按坐标点击")
+            try:
+                tap_relative(driver, 0.33, 0.40)
+                time.sleep(2)
+            except Exception as e:
+                log(f"坐标点击讨论 tab 失败: {e}")
 
-    save_screenshot(driver, "05_comment_page")
+        save_screenshot(driver, f"05_comment_{i + 1}_page")
 
-    edit = get_input(driver, [
-        "//android.widget.EditText[contains(@hint,'评论')]",
-        "//android.widget.EditText[contains(@hint,'说点')]",
-        "//android.widget.EditText[contains(@hint,'写点什么')]",
-        "//android.widget.EditText",
-    ])
-    if not edit:
-        log("未找到评论输入框")
-        return False
-    edit.click()
-    edit.clear()
-    edit.send_keys(COMMENT_TEXT)
-    log(f"已填写评论: {COMMENT_TEXT}")
-    time.sleep(1)
+        edit = get_input(driver, [
+            "//android.widget.EditText[contains(@hint,'评论')]",
+            "//android.widget.EditText[contains(@hint,'说点')]",
+            "//android.widget.EditText[contains(@hint,'写点什么')]",
+            "//android.widget.EditText",
+        ])
+        if not edit:
+            log("未找到评论输入框，跳过本条")
+            go_home(driver)
+            continue
+        edit.click()
+        edit.clear()
+        edit.send_keys(COMMENT_TEXT)
+        log(f"已填写评论: {COMMENT_TEXT}")
+        time.sleep(1)
 
-    # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
-    clicked = _press_send_key(driver)
-    if not clicked:
-        clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=3)
+        # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
+        clicked = _press_send_key(driver)
+        if not clicked:
+            clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=3)
 
-    time.sleep(2)
-    save_screenshot(driver, "06_comment_done")
-    if clicked:
-        log("评论已发送")
-        return True
-    log("评论发送失败：未找到发送按钮且键盘发送键无效")
-    return False
+        time.sleep(2)
+        save_screenshot(driver, f"06_comment_{i + 1}_done")
+        if clicked:
+            success += 1
+            log(f"第 {i + 1} 条评论已发送")
+        else:
+            log(f"第 {i + 1} 条评论发送失败")
+        go_home(driver)
+
+    log(f"评论任务完成：成功 {success}/{COMMENT_COUNT} 条")
+    return success > 0
 
 
 def do_danmaku(driver, wait):
-    """执行发弹幕领金币：首页进入任意视频 → 点击「立即观看」开始播放 → 点击弹幕入口 → 输入弹幕 → 发送。"""
+    """执行发弹幕领金币：进入视频详情页 → 启动播放 → 点击弹幕入口 → 输入 → 发送。
+
+    关键点：必须先播放视频，否则弹幕无法发送。
+    """
     log("开始执行：发弹幕领金币")
     if not run_with_retry(enter_first_video, "进入视频详情页", driver):
         log("无法进入视频详情页，弹幕任务失败")
         return False
     time.sleep(2)
 
-    # 必须先点击「立即观看」等按钮开始播放，否则弹幕无法发送
-    if not (find_and_click(driver, ["立即观看"], timeout=5) or
-            click_contains(driver, ["观看视频", "立即播放", "免费观看"], timeout=3)):
-        log("未找到立即观看按钮，可能已在播放状态，继续尝试发弹幕")
-    else:
-        log("已点击立即观看，等待播放器加载")
-        time.sleep(4)
+    # 必须先启动播放，否则弹幕无法发送
+    start_video_playback(driver)
+    time.sleep(2)
 
     save_screenshot(driver, "07_danmaku_page")
 
