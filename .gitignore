@@ -1,0 +1,18 @@
+# APK 文件不要提交到 GitHub
+*.apk
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+ipynb_checkpoints/
+
+# 本地环境
+.env
+.venv/
+venv/
+
+# 截图/日志
+screenshots/
+*.log
