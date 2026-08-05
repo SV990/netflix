@@ -73,19 +73,23 @@ def is_video_detail_page(driver):
     return True
 
 
-def go_home(driver):
-    """尽量返回 APP 首页 feed（关键：绝不能退到系统桌面）。"""
+def go_home(driver, dump=False):
+    """尽量返回 APP 首页 feed（关键：绝不能退到系统桌面）。
+
+    dump: 是否保存首页控件树（ui_home.xml + UI 摘要）。热循环里每轮都 dump 会很慢，
+    默认关掉；仅在需要排查布局时（如每次运行首条评论）显式传 dump=True。
+    """
     ensure_app_foreground(driver)  # 先保证在 APP 内
     # 优先点底部主 tab 回到 feed
     if find_and_click(driver, ["首页", "推荐", "视频", "发现", "精选"], timeout=5):
         log("已点击主 tab 回到 feed")
-        time.sleep(2)
+        time.sleep(1.5)
     else:
         # 兜底：最多两次 back（不过度，避免退出 APP）
         for _ in range(2):
             try:
                 driver.back()
-                time.sleep(1.5)
+                time.sleep(1)
             except Exception:
                 break
             if find_and_click(driver, ["首页", "推荐", "视频", "发现"], timeout=3):
@@ -94,10 +98,10 @@ def go_home(driver):
     for _ in range(3):
         if not dismiss_common_popups(driver):
             break
-    time.sleep(2)
+    time.sleep(1.5)
     ensure_app_foreground(driver)  # 若 back 误退到桌面，这里拉回
-    # 仅在 APP 内时才保存 dump（避免把桌面控件树当成首页）
-    if driver.current_package == PKG:
+    # 仅在 APP 内且调用方要求时才保存 dump（避免把桌面控件树当成首页，并减少热循环开销）
+    if dump and driver.current_package == PKG:
         save_ui_dump(driver, "ui_home")
         log_ui_summary(driver)
 
@@ -142,7 +146,7 @@ def swipe_feed_up(driver):
         driver.swipe(int(w * 0.5), int(h * 0.75), int(w * 0.5), int(h * 0.25), 600)
     except Exception as e:
         log(f"滑动feed失败: {e}")
-    time.sleep(2)
+    time.sleep(1.5)
 
 
 def enter_video_by_index(driver, index=0):
@@ -156,8 +160,8 @@ def enter_video_by_index(driver, index=0):
       全程以 is_video_detail_page 校验是否真正进入详情页。
     """
     ensure_app_foreground(driver)
-    go_home(driver)
-    time.sleep(2)
+    go_home(driver, dump=(index == 0))
+    time.sleep(1.5)
 
     # 不同 index => 不同位置，保证 5 条评论落在不同视频
     for _ in range(min(index, 6)):
@@ -183,7 +187,7 @@ def enter_video_by_index(driver, index=0):
             card = cards[(index + off) % len(cards)]
             try:
                 card.click()
-                time.sleep(2.5)
+                time.sleep(1.5)
                 log("已点击视频卡片（元素定位）")
                 if is_video_detail_page(driver):
                     return True
@@ -195,7 +199,7 @@ def enter_video_by_index(driver, index=0):
         log(f"点击视频区域 ({pos[0]},{pos[1]})")
         try:
             driver.tap([(int(w * pos[0]), int(h * pos[1]))])
-            time.sleep(2.5)
+            time.sleep(1.5)
         except Exception as e:
             log(f"点击失败: {e}")
         if is_video_detail_page(driver):
@@ -224,7 +228,7 @@ def start_video_playback(driver):
         "开始播放", "播放视频", "立即播放",
     ], timeout=4):
         log("已点击播放文字按钮，等待加载")
-        time.sleep(6)
+        time.sleep(5)
         return True
     # 2) 点击播放器中央（暂停态通常显示大播放按钮，点击即播放）
     try:
@@ -233,7 +237,7 @@ def start_video_playback(driver):
         x, y = int(w * 0.5), int(h * 0.22)
         driver.tap([(x, y)])
         log(f"已点击播放器中央 ({x},{y})，等待加载")
-        time.sleep(6)
+        time.sleep(5)
         return True
     except Exception as e:
         log(f"点击播放器中央失败: {e}")

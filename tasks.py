@@ -94,10 +94,11 @@ def do_comment(driver, wait):
             log("无法进入视频详情页，跳过本条")
             go_home(driver)
             continue
-        time.sleep(1.5)
-        # 诊断：保存详情页控件树，便于分析「讨论」tab 与评论输入框的真实结构
-        save_ui_dump(driver, f"ui_detail_{i + 1}")
-        log_ui_summary(driver)
+        time.sleep(1)
+        # 诊断：仅首条评论保存详情页控件树，避免每条都 dump 拖慢速度
+        if i == 0:
+            save_ui_dump(driver, f"ui_detail_{i + 1}")
+            log_ui_summary(driver)
 
         # 切换到「讨论」tab
         if not find_and_click(driver, ["讨论"], timeout=5):
@@ -124,14 +125,14 @@ def do_comment(driver, wait):
         edit.clear()
         edit.send_keys(COMMENT_TEXT)
         log(f"已填写评论: {COMMENT_TEXT}")
-        time.sleep(1)
+        time.sleep(0.5)
 
         # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
         clicked = _press_send_key(driver)
         if not clicked:
             clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=3)
 
-        time.sleep(2)
+        time.sleep(1)
         save_screenshot(driver, f"06_comment_{i + 1}_done")
         if clicked:
             success += 1
