@@ -4,7 +4,7 @@ import time
 
 from selenium.webdriver.common.by import By
 
-from config import log, APP_USERNAME, APP_PASSWORD
+from config import log, APP_USERNAME, APP_PASSWORD, PKG, ACTIVITY
 from ui import find_and_click, click_contains, swipe_right, tap_relative, get_input
 
 
@@ -94,6 +94,37 @@ def dismiss_common_popups(driver, timeout=3):
         except Exception:
             continue
     return False
+
+
+def ensure_app_foreground(driver):
+    """确保奈飞工厂 APP 处于前台；若被退到桌面/后台则重新拉起。
+
+    这是防止脚本「卡在系统桌面」的关键兜底：一旦检测到当前 package 不是本 APP，
+    就通过 activate_app / start_activity 重新拉起，避免后续所有点击都打在桌面上。
+    """
+    try:
+        cur = driver.current_package
+    except Exception:
+        cur = None
+    if cur == PKG:
+        return True
+    log(f"当前不在 APP 内（package={cur}），尝试重新拉起 {PKG}")
+    try:
+        driver.activate_app(PKG)
+    except Exception:
+        try:
+            driver.start_activity(PKG, ACTIVITY)
+        except Exception as e:
+            log(f"重新拉起 APP 失败: {e}")
+    time.sleep(5)
+    try:
+        dismiss_common_popups(driver)
+    except Exception:
+        pass
+    try:
+        return driver.current_package == PKG
+    except Exception:
+        return False
 
 
 def is_login_page(driver):
