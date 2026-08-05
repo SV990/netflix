@@ -160,59 +160,77 @@ def save_screenshot(driver, name):
         log(f"截图保存失败: {e}")
 
 
-def swipe_right(driver, duration=500):
-    """在屏幕中央从右向左滑动（用于翻引导页）。"""
+def click_contains(driver, keywords, timeout=3):
+    """点击文本包含任一关键字的可见元素（用于按钮文案不固定时）。返回命中的关键字或 None。"""
+    for kw in keywords:
+        try:
+            el = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.XPATH, f"//*[contains(@text,'{kw}')]"))
+            )
+            el.click()
+            return kw
+        except Exception:
+            continue
+    return None
+
+
+def swipe_right(driver, duration=700):
+    """在屏幕中央从右向左滑动（用于翻引导页，进入下一页）。"""
     size = driver.get_window_size()
     x, y = size["width"], size["height"]
-    start_x, start_y = int(x * 0.8), int(y * 0.5)
-    end_x = int(x * 0.2)
+    start_x, start_y = int(x * 0.85), int(y * 0.5)
+    end_x = int(x * 0.15)
     driver.swipe(start_x, start_y, end_x, start_y, duration)
 
 
-def is_onboarding_page(driver):
-    """检测当前是否在首次启动引导页/开屏广告页。"""
-    onboarding_texts = ["流畅播放", "极速加载", "追剧零卡顿", "精彩推荐", "海量资源", "高清画质"]
-    for t in onboarding_texts:
-        els = driver.find_elements(By.XPATH, f"//*[@text='{t}']")
-        if els:
-            return True
-    # 若页面没有底部 tab 且没有常见首页元素，但存在大量 ImageView，也认为是引导
-    tabs = driver.find_elements(By.XPATH, "//*[@text='首页' or @text='推荐' or @text='分类' or @text='我的']")
-    return not tabs
-
-
-def handle_launch_interferences(driver, max_swipes=5):
-    """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。"""
+def handle_launch_interferences(driver, max_swipes=6):
+    """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
+    采用「固定次数滑动 + 每轮尝试点结束按钮」策略，避免被 onboarding 文案判定卡死。
+    """
     log("检查并处理启动引导页/广告/弹窗")
-    for i in range(max_swipes + 3):
+    finish_texts = ["跳过", "跳过广告", "立即体验", "进入", "开始体验", "开始", "马上体验",
+                    "开启", "立即开启", "知道了", "同意并继续", "同意", "确定", "下一步",
+                    "完成", "进入奈飞", "立即进入"]
+    finish_kw = ["跳过", "体验", "进入", "开启", "同意", "完成", "开始", "下一步"]
+    perm_texts = ["允许", "仅使用期间允许", "ALLOW", "ALWAYS", "始终允许"]
+    perm_kw = ["允许", "同意"]
+    tab_xpath = "//*[@text='首页' or @text='推荐' or @text='我的' or @text='任务' or @text='福利' or @text='分类' or @text='视频']"
+
+    for i in range(max_swipes + 2):
         time.sleep(1.5)
 
-        # 1) 结束型按钮
-        if find_and_click(driver, ["跳过", "跳过广告", "立即体验", "进入", "开始体验", "开始", "知道了", "同意并继续", "同意", "确定"], timeout=2):
-            log("点击了启动页结束按钮/同意按钮")
-            time.sleep(2)
+        # 1) 尝试点结束/同意按钮（精确）
+        if find_and_click(driver, finish_texts, timeout=2):
+            log("点击了启动页结束/同意按钮（精确）")
+            time.sleep(2.5)
+        else:
+            # 模糊匹配（按钮文案不固定时）
+            hit = click_contains(driver, finish_kw, timeout=2)
+            if hit:
+                log(f"点击了启动页结束按钮（模糊匹配: {hit}）")
+                time.sleep(2.5)
 
-        # 2) 权限弹窗（位置可能 overlay 在最上层）
-        if find_and_click(driver, ["允许", "仅使用期间允许", "ALLOW", "ALLOW ONLY WHILE USING THE APP", "始终允许", "ALWAYS"], timeout=2):
-            log("处理了系统权限弹窗")
+        # 2) 权限弹窗
+        if find_and_click(driver, perm_texts, timeout=2):
+            log("处理了系统权限弹窗（精确）")
+            time.sleep(1.5)
+        else:
+            click_contains(driver, perm_kw, timeout=2)
             time.sleep(1.5)
 
-        # 3) 判断是否已到达主界面
-        tabs = driver.find_elements(By.XPATH, "//*[@text='首页' or @text='推荐' or @text='我的' or @text='任务']")
-        if tabs:
+        # 3) 是否已到达主界面
+        if driver.find_elements(By.XPATH, tab_xpath):
             log("已到达 APP 主界面")
             return
 
-        # 4) 若还在引导页，向右滑动翻页
-        if is_onboarding_page(driver):
-            log(f"检测到引导页，第 {i+1} 次向右滑动")
-            swipe_right(driver)
-            time.sleep(1)
-        else:
-            # 非引导页也尝试滑动一次，防止广告页
-            swipe_right(driver)
+        # 4) 固定滑动翻页（加强手势 + 长等待，不依赖 onboarding 文案判定）
+        log(f"第 {i+1} 次尝试滑动翻页")
+        swipe_right(driver, duration=700)
+        time.sleep(2.5)
 
-    log("启动引导处理结束，可能仍有弹窗未处理")
+    # 兜底：最后再精确点一次结束按钮
+    find_and_click(driver, finish_texts, timeout=3)
+    log("启动引导处理结束（已达最大滑动次数）")
 
 
 def is_login_page(driver):
