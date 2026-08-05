@@ -126,3 +126,23 @@ def get_input(driver, hints):
         except Exception:
             continue
     return None
+
+
+def tap_right_of_element(driver, element, rx=0.92):
+    """点击元素右侧区域（用于 Compose 界面中无 text 属性的按钮，如「发送」）。
+
+    取元素 bounds 的中心纵坐标，再点屏幕水平 rx 处（默认 92% 宽度）。
+    """
+    import re as _re
+    size = driver.get_window_size()
+    w, h = size["width"], size["height"]
+    bounds = element.get_attribute("bounds") or ""
+    nums = [int(x) for x in _re.findall(r"\d+", bounds)]
+    if len(nums) >= 4:
+        x1, y1, x2, y2 = nums[:4]
+        y = (y1 + y2) // 2
+    else:
+        y = int(h * 0.90)
+    x = int(w * rx)
+    driver.tap([(x, y)])
+    return x, y

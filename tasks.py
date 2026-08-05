@@ -7,7 +7,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from config import log, COMMENT_TEXT, DANMAKU_TEXT, MAX_RETRIES, COMMENT_COUNT
-from ui import find_and_click, click_contains, save_screenshot, get_input, tap_relative, save_ui_dump, log_ui_summary
+from ui import find_and_click, click_contains, save_screenshot, get_input, tap_relative, tap_right_of_element, save_ui_dump, log_ui_summary
 from launch import navigate_to_task
 from video import enter_first_video, enter_video_by_index, go_home, start_video_playback
 
@@ -128,11 +128,22 @@ def do_comment(driver, wait):
         time.sleep(0.5)
 
         # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
-        clicked = _press_send_key(driver)
+        # 优先点击输入框右侧的「发送」按钮（截图中蓝色文字按钮在输入框右边）
+        clicked = False
+        try:
+            tap_right_of_element(driver, edit, rx=0.92)
+            log("已点击输入框右侧发送按钮")
+            clicked = True
+        except Exception as e:
+            log(f"坐标点击发送按钮失败: {e}")
+
+        # 兜底：按键盘发送键 / 文字按钮
+        if not clicked:
+            clicked = _press_send_key(driver)
         if not clicked:
             clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=3)
 
-        time.sleep(1)
+        time.sleep(1.5)
         save_screenshot(driver, f"06_comment_{i + 1}_done")
         if clicked:
             success += 1
@@ -193,8 +204,18 @@ def do_danmaku(driver, wait):
     log(f"已填写弹幕: {DANMAKU_TEXT}")
     time.sleep(1)
 
-    # 优先按键盘发送键，再兜底点文字按钮
-    clicked = _press_send_key(driver)
+    # 优先点击输入框右侧的「发送」按钮
+    clicked = False
+    try:
+        tap_right_of_element(driver, edit, rx=0.92)
+        log("已点击弹幕输入框右侧发送按钮")
+        clicked = True
+    except Exception as e:
+        log(f"坐标点击弹幕发送按钮失败: {e}")
+
+    # 兜底：按键盘发送键 / 文字按钮
+    if not clicked:
+        clicked = _press_send_key(driver)
     if not clicked:
         clicked = find_and_click(driver, ["发送", "发布", "提交"], timeout=3)
 
