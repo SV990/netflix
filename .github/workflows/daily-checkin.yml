@@ -1,0 +1,64 @@
+name: Daily Check-in
+
+on:
+  schedule:
+    # 每天北京时间 00:00 执行（UTC 16:00 前一日）
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Appium server and UiAutomator2 driver
+        run: |
+          npm install -g appium
+          appium driver install uiautomator2
+
+      - name: Install Chromium for Playwright (anti-bot APK hosts)
+        if: contains(secrets.APK_DOWNLOAD_URL, 'lanzou') || contains(secrets.APK_DOWNLOAD_URL, 'dmpdmp')
+        run: python -m playwright install chromium
+
+      - name: Start Appium server
+        run: |
+          appium --address 127.0.0.1 --port 4723 --log-level error &
+          sleep 6
+          echo "Appium status:"
+          curl -s http://127.0.0.1:4723/status | head -c 300
+
+      - name: Run check-in on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_4
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            python checkin.py
+        env:
+          APP_USERNAME: ${{ secrets.APP_USERNAME }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          APK_DOWNLOAD_URL: ${{ secrets.APK_DOWNLOAD_URL }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          MAX_RETRIES: ${{ vars.MAX_RETRIES || '2' }}
+          SCREENSHOT_BASE_URL: ${{ secrets.SCREENSHOT_BASE_URL }}
+          APK_PATH: /tmp/app.apk
+          SCREENSHOT_DIR: ${{ github.workspace }}/screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/*.png
