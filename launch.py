@@ -41,6 +41,103 @@ def _tap_label(driver, kws, nodes):
     return False
 
 
+def _parse_all_bounds(src):
+    """解析所有带 bounds 的节点（不依赖 text/content-desc），返回 [(class,x1,y1,x2,y2), ...]。
+
+    Compose 引导页通常没有任何文字/描述，必须靠几何特征识别。
+    """
+    nodes = []
+    try:
+        root = ET.fromstring(src)
+    except Exception:
+        return nodes
+    for n in root.iter("node"):
+        a = n.attrib
+        bounds = a.get("bounds", "")
+        nums = [int(x) for x in re.findall(r"\d+", bounds)]
+        if len(nums) >= 4:
+            nodes.append((a.get("class", ""), nums[0], nums[1], nums[2], nums[3]))
+    return nodes
+
+
+def is_onboarding_page(xml, w, h):
+    """基于几何特征判断是否为 onboarding/引导页。
+
+    典型特征：一个大居中媒体/插画 View + 底部 3~5 个指示器小点。
+    例如「个性推荐」页：大 View [83,447][997,1833]，底部 4 个指示点 [359,2031]~[722,2163]。
+    """
+    nodes = _parse_all_bounds(xml)
+    if not nodes:
+        return False
+    big_views = 0
+    bottom_dots = 0
+    for cls, x1, y1, x2, y2 in nodes:
+        bw, bh = x2 - x1, y2 - y1
+        # 排除全屏根节点；大视图约占屏幕宽度 70%~96%、高度 35%~85%，位于中上部
+        if (0.7 * w < bw < 0.96 * w) and (0.35 * h < bh < 0.85 * h) and (0.05 * h < y1) and (y2 < 0.9 * h):
+            big_views += 1
+        # 底部指示点：靠近底部、宽高较小、水平居中
+        if y1 > 0.84 * h and bh < 0.15 * h and bw < 0.18 * w:
+            cx = (x1 + x2) / 2
+            if 0.25 * w < cx < 0.75 * w:
+                bottom_dots += 1
+    return big_views >= 1 and bottom_dots >= 3
+
+
+def handle_onboarding_pages(driver, max_taps=6):
+    """处理 Compose onboarding/引导页。
+
+    这些页面通常不暴露 text/content-desc，只能按几何坐标点击底部中央的操作按钮
+    （如「立即开启」「下一步」「完成」）。
+    """
+    log("检查 onboarding/引导页")
+    try:
+        size = driver.get_window_size()
+        w, h = size["width"], size["height"]
+    except Exception as e:
+        log(f"获取屏幕尺寸失败: {e}")
+        return False
+
+    home_markers = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频"]
+
+    for i in range(max_taps):
+        try:
+            xml = driver.page_source
+        except Exception:
+            xml = ""
+        if any(kw in xml for kw in home_markers):
+            log("已到达 APP 主界面")
+            return True
+        if not is_onboarding_page(xml, w, h):
+            log("当前页面不是 onboarding 页，结束处理")
+            return True
+
+        log(f"检测到 onboarding 页，点击底部中央操作按钮（第 {i+1}/{max_taps} 次）")
+        # 大图下方、指示点上方的按钮区域；先试 0.86，再 0.82 / 0.90 兜底
+        for ry in [0.86, 0.82, 0.90]:
+            try:
+                tap_relative(driver, 0.50, ry)
+                time.sleep(1.0)
+                xml2 = driver.page_source
+                if any(kw in xml2 for kw in home_markers):
+                    log("点击后已到达 APP 主界面")
+                    return True
+                if not is_onboarding_page(xml2, w, h):
+                    log("点击后已离开 onboarding 页")
+                    return True
+            except Exception as e:
+                log(f"点击 onboarding 按钮失败: {e}")
+                continue
+
+        # 若仍未离开，可能是多页引导，向右滑动翻页
+        log("尝试右滑翻下一页引导")
+        swipe_right(driver, duration=350)
+        time.sleep(0.8)
+
+    log(f"处理 onboarding 页达到最大次数 {max_taps}")
+    return False
+
+
 def handle_launch_interferences(driver, max_swipes=4):
     """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
 
@@ -91,7 +188,18 @@ def handle_launch_interferences(driver, max_swipes=4):
             time.sleep(0.5)
             continue
 
-        # 5) 滑动翻页
+        # 5) Compose onboarding 页几何识别（文字未暴露时，如「个性推荐」页）
+        try:
+            size = driver.get_window_size()
+            if is_onboarding_page(xml, size["width"], size["height"]):
+                log("几何特征识别到 onboarding 页，点击底部中央按钮")
+                tap_relative(driver, 0.50, 0.86)
+                time.sleep(1)
+                continue
+        except Exception as e:
+            log(f"onboarding 几何识别异常: {e}")
+
+        # 6) 滑动翻页
         log(f"第 {i+1} 次尝试滑动翻页")
         swipe_right(driver, duration=350)
         time.sleep(1)

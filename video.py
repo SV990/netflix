@@ -7,7 +7,7 @@ from selenium.webdriver.common.by import By
 
 from config import log, PKG
 from ui import find_and_click, click_contains, tap_relative, save_ui_dump, log_ui_summary
-from launch import dismiss_common_popups, ensure_app_foreground
+from launch import dismiss_common_popups, ensure_app_foreground, is_onboarding_page
 
 # 首页视频卡片候选点击位置（相对坐标，兜底用）。
 VIDEO_CANDIDATES = [
@@ -56,6 +56,17 @@ def is_video_detail_page(driver):
         return False
     if is_home_feed(driver):
         return False
+
+    # 排除 onboarding/引导页（如「个性推荐」页会被误判为详情页）
+    try:
+        xml = driver.page_source
+        size = driver.get_window_size()
+        if is_onboarding_page(xml, size["width"], size["height"]):
+            log("当前为 onboarding 页，不视为视频详情页")
+            return False
+    except Exception:
+        pass
+
     # 详情页特征：返回按钮（content-desc='返回'）几乎只出现在详情页
     try:
         if driver.find_elements(By.XPATH, "//*[@content-desc='返回']"):
@@ -86,6 +97,15 @@ def go_home(driver, dump=False):
     默认关掉；仅在需要排查布局时（如每次运行首条评论）显式传 dump=True。
     """
     ensure_app_foreground(driver)  # 先保证在 APP 内
+
+    # 先处理 onboarding/引导页（登录/签到后可能出现「个性推荐」等）
+    from launch import handle_onboarding_pages
+    try:
+        if handle_onboarding_pages(driver):
+            time.sleep(1)
+    except Exception as e:
+        log(f"处理 onboarding 页失败: {e}")
+
     # 优先点底部主 tab 回到 feed
     if find_and_click(driver, ["首页", "推荐", "视频", "发现", "精选"], timeout=5):
         log("已点击主 tab 回到 feed")

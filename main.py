@@ -20,7 +20,7 @@ from config import (
     PKG, ACTIVITY, SCREENSHOT_DIR, TASK_RESULTS,
 )
 from apk import download_apk, install_apk
-from launch import handle_launch_interferences, try_login, dismiss_common_popups
+from launch import handle_launch_interferences, try_login, dismiss_common_popups, handle_onboarding_pages
 from tasks import run_with_retry, do_checkin, do_comment, do_danmaku
 from ui import save_screenshot
 from notify import notify_feishu
@@ -72,6 +72,10 @@ def main():
 
         TASK_RESULTS["每日签到"] = run_with_retry(do_checkin, "每日签到", driver, wait)
         save_screenshot(driver, "04_after_checkin")
+
+        # 登录/签到后可能出现 onboarding 引导页（如「个性推荐」），先处理掉再进入任务
+        handle_onboarding_pages(driver)
+        save_screenshot(driver, "04_after_onboarding")
 
         # 注意：do_comment / do_danmaku 内部已各自循环/重试，这里务必直接调用，
         # 不要再包一层 run_with_retry，否则整段任务会重跑、把单次运行时间拖到十几分钟。
