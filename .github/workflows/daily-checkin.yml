@@ -29,6 +29,16 @@ jobs:
       - name: Install Chromium for Playwright (for anti-bot APK hosts)
         run: python -m playwright install chromium
 
+      - name: Enable KVM hardware acceleration
+        run: |
+          # GitHub ubuntu runner 的 runner 用户默认不在 kvm 组，导致 /dev/kvm 无权限、
+          # 模拟器被迫走纯软件模拟(-accel off)而启动超时。放开权限后即可用 KVM 硬件加速。
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660"' | sudo tee /etc/udev/rules.d/50-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+
       - name: Run check-in on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
