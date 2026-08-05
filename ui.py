@@ -60,6 +60,29 @@ def save_ui_dump(driver, name):
         log(f"UI 控件树保存失败: {e}")
 
 
+def log_ui_summary(driver, max_nodes=60):
+    """把当前页面中有文字 / 可点击的节点摘要直接打到日志。
+
+    这样在 GitHub Actions 日志里即可看到首页真实布局（无需下载 artifact 再分析），
+    便于快速定位「视频卡片」「讨论 tab」「弹幕入口」等控件。
+    """
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(driver.page_source)
+        count = 0
+        for n in root.iter("node"):
+            a = n.attrib
+            t = (a.get("text") or "").strip()
+            d = (a.get("content-desc") or "").strip()
+            click = a.get("clickable", "")
+            if (t or d or click == "true") and count < max_nodes:
+                log(f"  [UI] text='{t}' desc='{d}' clickable={click} bounds={a.get('bounds')}")
+                count += 1
+        log(f"UI 摘要：已打印 {count} 个关键节点（用于定位视频卡片/讨论/弹幕入口）")
+    except Exception as e:
+        log(f"UI 摘要失败: {e}")
+
+
 def swipe_right(driver, duration=700):
     """屏幕中央从右向左滑动（翻引导页，进入下一页）。"""
     size = driver.get_window_size()

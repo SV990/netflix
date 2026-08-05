@@ -6,7 +6,7 @@ import time
 from selenium.webdriver.common.by import By
 
 from config import log
-from ui import find_and_click, click_contains, tap_relative, save_ui_dump
+from ui import find_and_click, click_contains, tap_relative, save_ui_dump, log_ui_summary
 from launch import dismiss_common_popups
 
 # 首页视频卡片候选点击位置（相对坐标，兜底用）。
@@ -57,8 +57,9 @@ def go_home(driver):
         if not dismiss_common_popups(driver):
             break
     time.sleep(2)
-    # 诊断：保存首页真实控件树，便于分析视频卡片布局
+    # 诊断：保存首页真实控件树，并直接在日志打印关键节点（无需下载 artifact 即可分析布局）
     save_ui_dump(driver, "ui_home")
+    log_ui_summary(driver)
 
 
 def find_video_card(driver):
@@ -130,7 +131,7 @@ def enter_video_by_index(driver, index=0):
         log("成功进入视频详情页")
         return True
 
-    # 方式二：坐标兜底
+    # 方式二：坐标兜底（每个候选只等 1.5 秒，快速失败，避免无谓拖时长）
     size = driver.get_window_size()
     w, h = size["width"], size["height"]
     for off in range(len(VIDEO_CANDIDATES)):
@@ -141,7 +142,7 @@ def enter_video_by_index(driver, index=0):
         log(f"坐标兜底点击 ({pos[0]},{pos[1]})")
         try:
             driver.tap([(int(w * pos[0]), int(h * pos[1]))])
-            time.sleep(4)
+            time.sleep(1.5)
         except Exception as e:
             log(f"点击失败: {e}")
     log("未能进入视频详情页")

@@ -89,11 +89,12 @@ def do_comment(driver, wait):
     success = 0
     for i in range(COMMENT_COUNT):
         log(f"--- 评论第 {i + 1}/{COMMENT_COUNT} 条 ---")
-        if not run_with_retry(lambda d: enter_video_by_index(d, i), "进入视频详情页", driver):
+        # 进入视频失败时立即跳到下一条，不要整条重试（避免把单次运行拖到十几分钟）
+        if not enter_video_by_index(driver, i):
             log("无法进入视频详情页，跳过本条")
             go_home(driver)
             continue
-        time.sleep(2)
+        time.sleep(1.5)
 
         # 切换到「讨论」tab
         if not find_and_click(driver, ["讨论"], timeout=5):
