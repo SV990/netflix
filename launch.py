@@ -81,15 +81,16 @@ def is_onboarding_page(xml, w, h):
     dots = 0
     for cls, x1, y1, x2, y2 in nodes:
         bw, bh = x2 - x1, y2 - y1
-        # 大媒体区：占屏较宽且较高，位于中上部（含近似全屏引导图）
-        if (0.55 * w < bw) and (0.45 * h < bh) and (y1 < 0.6 * h) and (y2 < 0.97 * h):
+        # 大媒体区：占屏较宽且较高，位于中上部（含近似全屏/全屏引导大图，不再加 y2 上界）
+        if (0.55 * w < bw) and (0.45 * h < bh) and (y1 < 0.6 * h):
             big += 1
         # 底部指示点：靠近底部、宽高较小、水平居中
         if y1 > 0.82 * h and bh < 0.12 * h and bw < 0.2 * w:
             cx = (x1 + x2) / 2
             if 0.2 * w < cx < 0.8 * w:
                 dots += 1
-    return big >= 1 and dots >= 1
+    return (big >= 1 and dots >= 1) or (big >= 1 and not any(
+        k in xml for k in ["首页", "推荐", "我的", "任务", "详情", "讨论"]))
 
 
 def handle_onboarding_pages(driver, max_taps=6):
@@ -153,17 +154,18 @@ def _swipe_left(driver, duration=350):
     driver.swipe(int(x * 0.15), int(y * 0.5), int(x * 0.85), int(y * 0.5), duration)
 
 
-def handle_launch_interferences(driver, max_swipes=8):
+def handle_launch_interferences(driver, max_rounds=14):
     """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
 
     性能要点：Compose 应用下每次 find_elements 都会触发完整控件树 dump，极慢。
     这里改为**每轮只 page_source 一次**，本地解析节点后点坐标，把「每轮 4~6 次 dump」
-    降到「每轮 1 次」，启动引导通常可在 10 秒内走完。
+    降到「每轮 1 次」。
 
     健壮性要点（针对纯 Compose、无 text/desc 的引导页）：
       - 几何识别「大图 + 底部指示点」的 onboarding 页，按坐标点底部中央按钮；
-      - 识别不到时兜底点击底部中央按钮（应对「立即开启/下一步」类无文字按钮）；
-      - 滑动翻页**交替方向**（右/左），应对不同引导方向；
+      - 纯图形（0 文字）引导页很可能是「点一下翻一页」而非滑动翻页，因此：
+        连续点击多个候选按钮位置走引导，页面一旦变化就继续点下一处，
+        仅当连续多次点击都无变化时才退而尝试滑动翻页；
       - 卡住时保存一次真实布局（ui_launch_stuck）便于排查。
     """
     log("检查并处理启动引导页/广告/弹窗")
@@ -183,9 +185,17 @@ def handle_launch_interferences(driver, max_swipes=8):
     perm_kw = ["允许", "同意"]
     tab_keywords = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频"]
 
+    # 纯图形引导页（无文字）时尝试点击的候选位置（相对坐标），覆盖常见按钮区
+    graphic_taps = [
+        (0.50, 0.85), (0.50, 0.90), (0.50, 0.80),
+        (0.82, 0.86), (0.82, 0.90), (0.50, 0.72),
+        (0.50, 0.45), (0.50, 0.62),
+    ]
+
     last_xml = ""
-    stuck = 0
-    for i in range(max_swipes + 1):
+    no_change = 0
+    tap_idx = 0
+    for i in range(max_rounds + 1):
         # 每轮仅 dump 一次，本地解析（避免多次控件树查找拖慢）
         try:
             xml = driver.page_source
@@ -198,7 +208,6 @@ def handle_launch_interferences(driver, max_swipes=8):
            any(k in xml for k in tab_keywords):
             log("已到达 APP 主界面")
             return
-
         # 2) 结束/同意按钮（精确）
         if _tap_label(driver, finish_texts, nodes):
             log("点击了启动页结束/同意按钮（精确）")
@@ -223,9 +232,12 @@ def handle_launch_interferences(driver, max_swipes=8):
         try:
             size = driver.get_window_size()
             if is_onboarding_page(xml, size["width"], size["height"]):
-                log("几何特征识别到 onboarding 页，点击底部中央按钮")
-                for ry in [0.85, 0.82, 0.90]:
-                    tap_relative(driver, 0.50, ry)
+                log("几何特征识别到 onboarding 页，依次点击候选按钮位置")
+                candidates = [(0.50, 0.85), (0.50, 0.90), (0.50, 0.80),
+                              (0.82, 0.86), (0.82, 0.90), (0.50, 0.72),
+                              (0.50, 0.62), (0.50, 0.45)]
+                for cx, cy in candidates:
+                    tap_relative(driver, cx, cy)
                     time.sleep(1.0)
                     try:
                         xml2 = driver.page_source
@@ -241,20 +253,49 @@ def handle_launch_interferences(driver, max_swipes=8):
         except Exception as e:
             log(f"onboarding 几何识别异常: {e}")
 
-        # 6) 兜底：点击底部中央按钮（应对无文字的「立即开启/下一步」类引导页）
-        xml3 = xml
-        log("未识别到可点击文字/几何特征，尝试点击底部中央按钮")
-        try:
-            tap_relative(driver, 0.50, 0.85)
-            time.sleep(1.0)
-            xml3 = driver.page_source
-        except Exception:
-            pass
-        if any(k in xml3 for k in tab_keywords):
-            log("点击底部中央后已到达主界面")
-            return
+        # 6) 纯图形屏幕（0 文字）：优先连续点击候选位置走引导，页面变化即视为翻页成功
+        has_text = any(lbl for lbl, *_ in nodes)
+        if not has_text:
+            pos = graphic_taps[tap_idx % len(graphic_taps)]
+            tap_idx += 1
+            log(f"纯图形屏幕，尝试点击 ({pos[0]},{pos[1]}) 第{tap_idx}次")
+            try:
+                tap_relative(driver, pos[0], pos[1])
+                time.sleep(1.2)
+                xml3 = driver.page_source
+            except Exception:
+                xml3 = xml
+            if any(k in xml3 for k in tab_keywords):
+                log("点击后已到达 APP 主界面")
+                return
+            if xml3 and xml3 != last_xml:
+                log("页面已变化（可能翻到下一引导页），继续点击")
+                last_xml = xml3
+                no_change = 0
+                continue
+            # 无变化
+            no_change += 1
+            last_xml = xml3
+            if no_change >= 4:
+                # 连续多次点击无变化 → 试一次滑动翻页（交替方向）
+                direction = "右" if no_change % 2 == 0 else "左"
+                log(f"连续点击无变化，尝试滑动翻页（{direction}）")
+                if direction == "右":
+                    swipe_right(driver, duration=350)
+                else:
+                    _swipe_left(driver, duration=350)
+                time.sleep(1)
+                no_change = 0
+                last_xml = ""
+            if i % 6 == 0:
+                try:
+                    save_ui_dump(driver, "ui_launch_stuck")
+                    log_ui_summary(driver)
+                except Exception:
+                    pass
+            continue
 
-        # 7) 滑动翻页：交替方向（右/左），应对不同引导方向
+        # 7) 有文字但没匹配上 → 兜底滑动翻页（交替方向）
         direction = "右" if i % 2 == 0 else "左"
         log(f"第 {i+1} 次尝试滑动翻页（{direction}）")
         if direction == "右":
@@ -262,20 +303,6 @@ def handle_launch_interferences(driver, max_swipes=8):
         else:
             _swipe_left(driver, duration=350)
         time.sleep(1)
-
-        # 防呆：连续多次页面无变化则保存一次布局以便排查
-        if xml3 == last_xml:
-            stuck += 1
-        else:
-            stuck = 0
-            last_xml = xml3
-        if stuck >= 3:
-            try:
-                save_ui_dump(driver, "ui_launch_stuck")
-                log_ui_summary(driver)
-            except Exception:
-                pass
-            stuck = 0
 
     # 兜底：最后再精确点一次结束按钮
     try:
