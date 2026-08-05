@@ -9,6 +9,7 @@ on:
 jobs:
   checkin:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -41,19 +42,40 @@ jobs:
 
       - name: Run check-in on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
+        timeout-minutes: 15
         with:
           api-level: 30
           arch: x86_64
           profile: pixel_4
           disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
-            # 模拟器已就绪，再启动 Appium，确保 checkin.py 运行时 Appium 一定存活
+            # 1) 确认模拟器已被 adb 识别、且启动完成
+            # （防御 5037 adb 连接异常导致设备不可见：打出设备列表 + 轮询 boot_completed）
+            adb wait-for-device
+            adb devices -l || true
+            for i in $(seq 1 30); do
+              if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+                echo "模拟器启动完成"
+                break
+              fi
+              sleep 5
+            done
+            echo "boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+
+            # 2) 启动 Appium 并轮询就绪（用轮询代替固定 sleep，避免启动慢时连接失败）
             appium --address 127.0.0.1 --port 4723 --log-level error > /tmp/appium.log 2>&1 &
-            sleep 10
-            echo "Appium status:"
-            curl -s http://127.0.0.1:4723/status | head -c 300
+            for i in $(seq 1 30); do
+              if curl -s http://127.0.0.1:4723/status >/dev/null 2>&1; then
+                echo "Appium 已就绪"
+                break
+              fi
+              sleep 2
+            done
+            curl -s http://127.0.0.1:4723/status | head -c 300 || true
             echo
+
+            # 3) 运行签到脚本
             python checkin.py
         env:
           APP_USERNAME: ${{ secrets.APP_USERNAME }}
