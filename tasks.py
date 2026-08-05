@@ -30,6 +30,18 @@ def run_with_retry(fn, name, *args, **kwargs):
     return False
 
 
+def _press_send_key(driver):
+    """按键盘发送键（IME action / 右下角绿色 ✓）。适用于文字按钮不可见的 Compose 界面。"""
+    try:
+        log("按键盘发送键(KEYCODE_ENTER=66)")
+        driver.press_keycode(66)  # KEYCODE_ENTER
+        time.sleep(1)
+        return True
+    except Exception as e:
+        log(f"按键盘发送键失败: {e}")
+        return False
+
+
 def do_checkin(driver, wait):
     """执行每日签到。"""
     log("正在进入任务页")
@@ -104,30 +116,43 @@ def do_comment(driver, wait):
     edit.send_keys(COMMENT_TEXT)
     log(f"已填写评论: {COMMENT_TEXT}")
     time.sleep(1)
-    clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=6)
+
+    # 优先按键盘发送键（IME action / 右下角 ✓），再兜底点文字按钮
+    clicked = _press_send_key(driver)
+    if not clicked:
+        clicked = find_and_click(driver, ["发送", "发布", "提交", "评论", "发送评论"], timeout=3)
+
     time.sleep(2)
     save_screenshot(driver, "06_comment_done")
     if clicked:
         log("评论已发送")
         return True
-    log("未找到发送按钮")
+    log("评论发送失败：未找到发送按钮且键盘发送键无效")
     return False
 
 
 def do_danmaku(driver, wait):
-    """执行发弹幕领金币：首页进入任意视频 → 点击发弹幕入口 → 输入弹幕 → 发送。"""
+    """执行发弹幕领金币：首页进入任意视频 → 点击「立即观看」开始播放 → 点击弹幕入口 → 输入弹幕 → 发送。"""
     log("开始执行：发弹幕领金币")
     if not run_with_retry(enter_first_video, "进入视频详情页", driver):
         log("无法进入视频详情页，弹幕任务失败")
         return False
     time.sleep(2)
 
+    # 必须先点击「立即观看」等按钮开始播放，否则弹幕无法发送
+    if not (find_and_click(driver, ["立即观看"], timeout=5) or
+            click_contains(driver, ["观看视频", "立即播放", "免费观看"], timeout=3)):
+        log("未找到立即观看按钮，可能已在播放状态，继续尝试发弹幕")
+    else:
+        log("已点击立即观看，等待播放器加载")
+        time.sleep(4)
+
     save_screenshot(driver, "07_danmaku_page")
 
-    # 优先点击「点我发弹幕」入口
+    # 点击弹幕输入入口
     if not (find_and_click(driver, ["点我发弹幕"], timeout=5) or
             click_contains(driver, ["发弹幕", "弹幕"], timeout=3)):
-        log("未通过文字找到弹幕入口，尝试按坐标点击右下角弹幕按钮")
+        log("未通过文字找到弹幕入口，尝试按坐标点击")
         try:
             tap_relative(driver, 0.82, 0.43)
             time.sleep(2)
@@ -151,11 +176,16 @@ def do_danmaku(driver, wait):
     edit.send_keys(DANMAKU_TEXT)
     log(f"已填写弹幕: {DANMAKU_TEXT}")
     time.sleep(1)
-    clicked = find_and_click(driver, ["发送", "发布", "提交"], timeout=6)
+
+    # 优先按键盘发送键，再兜底点文字按钮
+    clicked = _press_send_key(driver)
+    if not clicked:
+        clicked = find_and_click(driver, ["发送", "发布", "提交"], timeout=3)
+
     time.sleep(2)
     save_screenshot(driver, "08_danmaku_done")
     if clicked:
         log("弹幕已发送")
         return True
-    log("未找到发送按钮")
+    log("弹幕发送失败：未找到发送按钮且键盘发送键无效")
     return False

@@ -24,8 +24,9 @@ FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
 
 # ---- 任务文案 ----
-COMMENT_TEXT = os.environ.get("COMMENT_TEXT", "不错，支持！")
-DANMAKU_TEXT = os.environ.get("DANMAKU_TEXT", "666")
+DEFAULT_TEXT = "生活慢慢，欢喜常在"
+COMMENT_TEXT = os.environ.get("COMMENT_TEXT", DEFAULT_TEXT)
+DANMAKU_TEXT = os.environ.get("DANMAKU_TEXT", DEFAULT_TEXT)
 
 # ---- 重试 / 反馈 ----
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "2"))
