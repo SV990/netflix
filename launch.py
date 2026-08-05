@@ -89,11 +89,15 @@ def is_onboarding_page(xml, w, h):
             cx = (x1 + x2) / 2
             if 0.2 * w < cx < 0.8 * w:
                 dots += 1
+    # 兜底：0 文字且有大面积媒体区，也视为 onboarding（最后一页可能没有指示点）
+    has_text = bool(_parse_nodes(xml))
+    if big >= 1 and not has_text:
+        return True
     return (big >= 1 and dots >= 1) or (big >= 1 and not any(
         k in xml for k in ["首页", "推荐", "我的", "任务", "详情", "讨论"]))
 
 
-def handle_onboarding_pages(driver, max_swipes=4):
+def handle_onboarding_pages(driver, max_swipes=6):
     """处理 Compose 多页 onboarding/引导页（如「流畅播放→高清画质→丰富片库→个性推荐」）。
 
     真实流程（截图确认）：
@@ -119,6 +123,7 @@ def handle_onboarding_pages(driver, max_swipes=4):
     finish_texts = ["立即开启", "开启", "立即体验", "开始体验", "进入", "开始",
                     "完成", "下一步", "知道了", "我知道了"]
 
+    last_xml = ""
     for i in range(max_swipes + 1):
         try:
             xml = driver.page_source
@@ -127,15 +132,21 @@ def handle_onboarding_pages(driver, max_swipes=4):
         if any(kw in xml for kw in home_markers):
             log("已到达 APP 主界面")
             return True
-        if not is_onboarding_page(xml, w, h):
-            log("当前页面不是 onboarding 页，结束处理")
+
+        # 只要仍像 onboarding 就继续处理；不强制要求 is_onboarding_page 返回 True，
+        # 避免「最后一页无指示点」被误判为普通页而跳过。
+        is_onb = is_onboarding_page(xml, w, h)
+        has_text = bool(_parse_nodes(xml))
+        if not is_onb and has_text:
+            log("当前页面有文字且不是 onboarding 特征，结束处理")
             return True
 
-        log(f"检测到 onboarding 页（第 {i+1}/{max_swipes+1} 页），尝试点击结束按钮")
+        log(f"检测到 onboarding/无文字页（第 {i+1}/{max_swipes+1} 页），尝试点击结束按钮")
+
         # 1) 先按文字点（最后一页可能暴露「立即开启」等）
         nodes = _parse_nodes(xml)
         if _tap_label(driver, finish_texts, nodes):
-            time.sleep(1.5)
+            time.sleep(2.0)
             try:
                 xml2 = driver.page_source
             except Exception:
@@ -148,10 +159,23 @@ def handle_onboarding_pages(driver, max_swipes=4):
                 return True
             continue
 
-        # 2) 按坐标点底部中央蓝色按钮（截图中「立即开启」约位于 y=0.82）
-        for ry in [0.82, 0.85, 0.78, 0.88]:
-            tap_relative(driver, 0.50, ry)
-            time.sleep(1.2)
+        # 2) 按坐标点底部中央蓝色按钮（截图中「立即开启」约位于 y=0.80~0.88）
+        # 同时覆盖 0.75~0.92 的纵向区域，避免不同屏幕比例偏差
+        bottom_candidates = [
+            (0.50, 0.82), (0.50, 0.85), (0.50, 0.80),
+            (0.50, 0.88), (0.50, 0.78), (0.50, 0.90),
+            (0.50, 0.75), (0.50, 0.92),
+        ]
+        tapped = False
+        for cx, cy in bottom_candidates:
+            log(f"尝试点击 onboarding 按钮位置 ({cx},{cy})")
+            try:
+                tap_relative(driver, cx, cy)
+                tapped = True
+            except Exception as e:
+                log(f"点击失败: {e}")
+                continue
+            time.sleep(2.0)
             try:
                 xml2 = driver.page_source
             except Exception:
@@ -162,11 +186,24 @@ def handle_onboarding_pages(driver, max_swipes=4):
             if xml2 and not is_onboarding_page(xml2, w, h):
                 log("坐标点击底部按钮后离开 onboarding 页")
                 return True
+            # 如果页面发生变化（可能翻到下一页），停止继续点同一页
+            if xml2 and xml2 != xml:
+                log("页面已发生变化，停止当前页点击，进入下一轮")
+                last_xml = xml2
+                break
 
-        # 3) 仍未离开，向右滑动翻下一页
-        log("尝试右滑翻下一页引导")
-        swipe_right(driver, duration=350)
-        time.sleep(1)
+        if tapped:
+            continue
+
+        # 3) 点击未让页面离开 onboarding，尝试滑动翻页（先右后左，两个方向都试）
+        if xml == last_xml:
+            log("页面未变化，尝试左滑翻页")
+            _swipe_left(driver, duration=400)
+        else:
+            log("尝试右滑翻下一页引导")
+            swipe_right(driver, duration=400)
+        last_xml = xml
+        time.sleep(1.5)
 
     log("处理 onboarding 页达到最大次数")
     return False
