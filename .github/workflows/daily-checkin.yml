@@ -8,13 +8,13 @@ on:
 
 jobs:
   checkin:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -29,27 +29,33 @@ jobs:
       - name: Install Chromium for Playwright (for anti-bot APK hosts)
         run: python -m playwright install chromium
 
-      - name: Start Appium server
-        run: |
-          appium --address 127.0.0.1 --port 4723 --log-level error &
-          sleep 6
-          echo "Appium status:"
-          curl -s http://127.0.0.1:4723/status | head -c 300
-
       - name: Run check-in on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
           profile: pixel_4
+          disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
+            # 模拟器已就绪，再启动 Appium，确保 checkin.py 运行时 Appium 一定存活
+            appium --address 127.0.0.1 --port 4723 --log-level error > /tmp/appium.log 2>&1 &
+            sleep 10
+            echo "Appium status:"
+            curl -s http://127.0.0.1:4723/status | head -c 300
+            echo
             python checkin.py
         env:
           APP_USERNAME: ${{ secrets.APP_USERNAME }}
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
           APK_DOWNLOAD_URL: ${{ secrets.APK_DOWNLOAD_URL }}
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          QINIU_AK: ${{ secrets.QINIU_AK }}
+          QINIU_SK: ${{ secrets.QINIU_SK }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN }}
           MAX_RETRIES: ${{ vars.MAX_RETRIES || '2' }}
           SCREENSHOT_BASE_URL: ${{ secrets.SCREENSHOT_BASE_URL }}
           APK_PATH: /tmp/app.apk
@@ -57,7 +63,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshots
           path: screenshots/*.png
