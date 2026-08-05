@@ -26,8 +26,7 @@ jobs:
           npm install -g appium
           appium driver install uiautomator2
 
-      - name: Install Chromium for Playwright (anti-bot APK hosts)
-        if: contains(secrets.APK_DOWNLOAD_URL, 'lanzou') || contains(secrets.APK_DOWNLOAD_URL, 'dmpdmp')
+      - name: Install Chromium for Playwright (for anti-bot APK hosts)
         run: python -m playwright install chromium
 
       - name: Start Appium server
