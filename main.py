@@ -22,7 +22,7 @@ from config import (
 from apk import download_apk, install_apk
 from launch import handle_launch_interferences, try_login, dismiss_common_popups, handle_onboarding_pages
 from tasks import run_with_retry, do_checkin, do_comment, do_danmaku
-from ui import save_screenshot
+from ui import save_screenshot, save_ui_dump, log_ui_summary
 from notify import notify_feishu
 
 
@@ -60,9 +60,13 @@ def main():
         # 处理首次启动引导页/开屏广告/隐私协议/权限弹窗
         handle_launch_interferences(driver)
         save_screenshot(driver, "01_after_onboarding")
+        save_ui_dump(driver, "ui_launch")
+        log_ui_summary(driver)
 
         run_with_retry(try_login, "登录", driver, wait)
         save_screenshot(driver, "02_after_login")
+        save_ui_dump(driver, "ui_login")
+        log_ui_summary(driver)
 
         # 登录后常见弹窗（系统公告、升级提示）
         for _ in range(3):

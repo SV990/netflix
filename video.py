@@ -73,7 +73,8 @@ def is_video_detail_page(driver):
             return True
     except Exception:
         pass
-    markers = ["详情", "讨论", "点我发弹幕", "选集", "简介", "收藏", "相关推荐", "发弹幕", "评论"]
+    markers = ["详情", "讨论", "点我发弹幕", "选集", "简介", "收藏", "相关推荐", "发弹幕",
+               "评论", "弹幕", "下载", "点赞", "倍速", "播放", "相关", "关注"]
     for m in markers:
         try:
             if driver.find_elements(By.XPATH, f"//*[contains(@text,'{m}')]"):
@@ -86,8 +87,11 @@ def is_video_detail_page(driver):
                 return True
         except Exception:
             continue
-    # 在 APP 内、看不到首页 Tab，默认已经进入详情页
-    return True
+    # 过去这里会「在 APP 内且看不到首页 Tab → 默认视为详情页」，
+    # 但这会造成假成功（停留在未知页/桌面拉起页也误判为详情页）。
+    # 改为：无正向后不视为详情页，交由上层 tap 策略去尝试，避免连锁误判。
+    log("未检测到详情页特征，不视为视频详情页")
+    return False
 
 
 def go_home(driver, dump=False):

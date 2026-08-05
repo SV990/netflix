@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from selenium.webdriver.common.by import By
 
 from config import log, APP_USERNAME, APP_PASSWORD, PKG, ACTIVITY
-from ui import find_and_click, click_contains, swipe_right, tap_relative, get_input
+from ui import find_and_click, click_contains, swipe_right, tap_relative, get_input, save_ui_dump, log_ui_summary
 
 
 def _parse_nodes(src):
@@ -63,25 +63,33 @@ def _parse_all_bounds(src):
 def is_onboarding_page(xml, w, h):
     """基于几何特征判断是否为 onboarding/引导页。
 
-    典型特征：一个大居中媒体/插画 View + 底部 3~5 个指示器小点。
-    例如「个性推荐」页：大 View [83,447][997,1833]，底部 4 个指示点 [359,2031]~[722,2163]。
+    典型特征：APP 内、没有首页/底部 Tab/详情页文字、且存在一个占屏较大的媒体区
+    （居中插画，或近似全屏引导大图）+ 底部若干指示小点。
+
+    注意：早期版本的严格上下界会把「近似全屏」的引导大图排除掉，导致误判为普通页、
+    从而只滑动不点击。这里放宽上界以兼容全屏引导图。
     """
     nodes = _parse_all_bounds(xml)
     if not nodes:
         return False
-    big_views = 0
-    bottom_dots = 0
+    # 若出现首页/详情/任务等特征文字，直接判定不是 onboarding
+    home_or_detail = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频",
+                      "详情", "讨论", "点我发弹幕", "选集", "签到", "评论", "弹幕"]
+    if any(k in xml for k in home_or_detail):
+        return False
+    big = 0
+    dots = 0
     for cls, x1, y1, x2, y2 in nodes:
         bw, bh = x2 - x1, y2 - y1
-        # 排除全屏根节点；大视图约占屏幕宽度 70%~96%、高度 35%~85%，位于中上部
-        if (0.7 * w < bw < 0.96 * w) and (0.35 * h < bh < 0.85 * h) and (0.05 * h < y1) and (y2 < 0.9 * h):
-            big_views += 1
+        # 大媒体区：占屏较宽且较高，位于中上部（含近似全屏引导图）
+        if (0.55 * w < bw) and (0.45 * h < bh) and (y1 < 0.6 * h) and (y2 < 0.97 * h):
+            big += 1
         # 底部指示点：靠近底部、宽高较小、水平居中
-        if y1 > 0.84 * h and bh < 0.15 * h and bw < 0.18 * w:
+        if y1 > 0.82 * h and bh < 0.12 * h and bw < 0.2 * w:
             cx = (x1 + x2) / 2
-            if 0.25 * w < cx < 0.75 * w:
-                bottom_dots += 1
-    return big_views >= 1 and bottom_dots >= 3
+            if 0.2 * w < cx < 0.8 * w:
+                dots += 1
+    return big >= 1 and dots >= 1
 
 
 def handle_onboarding_pages(driver, max_taps=6):
@@ -138,14 +146,35 @@ def handle_onboarding_pages(driver, max_taps=6):
     return False
 
 
-def handle_launch_interferences(driver, max_swipes=4):
+def _swipe_left(driver, duration=350):
+    """屏幕中央从左向右滑动（翻引导页，进入下一页）。"""
+    size = driver.get_window_size()
+    x, y = size["width"], size["height"]
+    driver.swipe(int(x * 0.15), int(y * 0.5), int(x * 0.85), int(y * 0.5), duration)
+
+
+def handle_launch_interferences(driver, max_swipes=8):
     """处理首次启动的引导页、开屏广告、隐私协议与权限弹窗。
 
     性能要点：Compose 应用下每次 find_elements 都会触发完整控件树 dump，极慢。
     这里改为**每轮只 page_source 一次**，本地解析节点后点坐标，把「每轮 4~6 次 dump」
     降到「每轮 1 次」，启动引导通常可在 10 秒内走完。
+
+    健壮性要点（针对纯 Compose、无 text/desc 的引导页）：
+      - 几何识别「大图 + 底部指示点」的 onboarding 页，按坐标点底部中央按钮；
+      - 识别不到时兜底点击底部中央按钮（应对「立即开启/下一步」类无文字按钮）；
+      - 滑动翻页**交替方向**（右/左），应对不同引导方向；
+      - 卡住时保存一次真实布局（ui_launch_stuck）便于排查。
     """
     log("检查并处理启动引导页/广告/弹窗")
+
+    # 先保存一份启动后的真实布局，便于后续排查（一次性，不在热循环内）
+    try:
+        save_ui_dump(driver, "ui_launch_before")
+        log_ui_summary(driver)
+    except Exception:
+        pass
+
     finish_texts = ["跳过", "跳过广告", "立即体验", "进入", "开始体验", "开始", "马上体验",
                     "开启", "立即开启", "知道了", "我知道了", "同意并继续", "同意", "确定", "下一步",
                     "完成", "进入奈飞", "立即进入", "关闭", "暂不", "以后再说"]
@@ -154,6 +183,8 @@ def handle_launch_interferences(driver, max_swipes=4):
     perm_kw = ["允许", "同意"]
     tab_keywords = ["首页", "推荐", "我的", "任务", "福利", "分类", "视频"]
 
+    last_xml = ""
+    stuck = 0
     for i in range(max_swipes + 1):
         # 每轮仅 dump 一次，本地解析（避免多次控件树查找拖慢）
         try:
@@ -193,16 +224,58 @@ def handle_launch_interferences(driver, max_swipes=4):
             size = driver.get_window_size()
             if is_onboarding_page(xml, size["width"], size["height"]):
                 log("几何特征识别到 onboarding 页，点击底部中央按钮")
-                tap_relative(driver, 0.50, 0.86)
-                time.sleep(1)
+                for ry in [0.85, 0.82, 0.90]:
+                    tap_relative(driver, 0.50, ry)
+                    time.sleep(1.0)
+                    try:
+                        xml2 = driver.page_source
+                    except Exception:
+                        xml2 = ""
+                    if any(k in xml2 for k in tab_keywords):
+                        log("点击后已到达 APP 主界面")
+                        return
+                    if not is_onboarding_page(xml2, size["width"], size["height"]):
+                        log("点击后已离开 onboarding 页")
+                        return
                 continue
         except Exception as e:
             log(f"onboarding 几何识别异常: {e}")
 
-        # 6) 滑动翻页
-        log(f"第 {i+1} 次尝试滑动翻页")
-        swipe_right(driver, duration=350)
+        # 6) 兜底：点击底部中央按钮（应对无文字的「立即开启/下一步」类引导页）
+        xml3 = xml
+        log("未识别到可点击文字/几何特征，尝试点击底部中央按钮")
+        try:
+            tap_relative(driver, 0.50, 0.85)
+            time.sleep(1.0)
+            xml3 = driver.page_source
+        except Exception:
+            pass
+        if any(k in xml3 for k in tab_keywords):
+            log("点击底部中央后已到达主界面")
+            return
+
+        # 7) 滑动翻页：交替方向（右/左），应对不同引导方向
+        direction = "右" if i % 2 == 0 else "左"
+        log(f"第 {i+1} 次尝试滑动翻页（{direction}）")
+        if direction == "右":
+            swipe_right(driver, duration=350)
+        else:
+            _swipe_left(driver, duration=350)
         time.sleep(1)
+
+        # 防呆：连续多次页面无变化则保存一次布局以便排查
+        if xml3 == last_xml:
+            stuck += 1
+        else:
+            stuck = 0
+            last_xml = xml3
+        if stuck >= 3:
+            try:
+                save_ui_dump(driver, "ui_launch_stuck")
+                log_ui_summary(driver)
+            except Exception:
+                pass
+            stuck = 0
 
     # 兜底：最后再精确点一次结束按钮
     try:
