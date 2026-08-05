@@ -48,6 +48,18 @@ def save_screenshot(driver, name):
         log(f"截图保存失败: {e}")
 
 
+def save_ui_dump(driver, name):
+    """保存当前页面的控件树（XML）到 SCREENSHOT_DIR，便于分析真实布局。"""
+    try:
+        os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+        path = os.path.join(SCREENSHOT_DIR, f"{name}.xml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        log(f"UI 控件树已保存: {path}")
+    except Exception as e:
+        log(f"UI 控件树保存失败: {e}")
+
+
 def swipe_right(driver, duration=700):
     """屏幕中央从右向左滑动（翻引导页，进入下一页）。"""
     size = driver.get_window_size()
